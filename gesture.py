@@ -56,7 +56,7 @@ class GestureAnalyzer:
             return "FIRE" if dy < 0 else "WATER"
 
         if abs(dx) >= abs(dy) * self._cfg.horizontal_ratio and abs(dx) >= 0.3 * length:
-            return "WIND" if dx > 0 else "EARTH"
+            return "EARTH" if dx > 0 else "WIND"
 
         if self._is_light_like(pts, length):
             return "LIGHT"

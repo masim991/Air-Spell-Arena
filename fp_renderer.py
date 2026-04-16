@@ -121,24 +121,25 @@ class FPRenderer:
         message_color:     Tuple[int, int, int],
         effects:           List[dict],
         difficulty:        str = "normal",
+        player_offset_x:   float = 0.0,
     ) -> None:
         self._tick += 1
 
-        # 1. Background
-        self._draw_bg()
+        # 1. Background (with parallax)
+        self._draw_bg(player_offset_x)
 
         # 2. Boss (behind effects)
-        self._draw_boss(boss_hp / BOSS_MAX_HP, effects)
+        self._draw_boss(boss_hp / BOSS_MAX_HP, effects, player_offset_x)
 
         # 3. Effects (projectiles)
-        self._draw_effects(effects)
+        self._draw_effects(effects, player_offset_x)
 
         # 4. Shield vignette
         if shield_time_left > 0:
             self._draw_shield_vignette(shield_time_left)
 
         # 5. Wand
-        self._draw_wand()
+        self._draw_wand(player_offset_x)
 
         # 6. HUD
         self._draw_hud(player_hp, boss_hp, shield_time_left, lightning_cd_left, difficulty)
@@ -149,9 +150,56 @@ class FPRenderer:
 
         pygame.display.flip()
 
+    def render_ending(self, state: str, tick: int) -> None:
+        """Render game_over or you_win ending screen."""
+        self._tick += 1
+        W, H = self.W, self.H
+        # Dim background
+        self._draw_bg(0.0)
+        overlay = pygame.Surface((W, H), pygame.SRCALPHA)
+        if state == "game_over":
+            overlay.fill((80, 0, 0, 170))
+        else:
+            overlay.fill((20, 10, 50, 150))
+        self.screen.blit(overlay, (0, 0))
+
+        if state == "game_over":
+            title_col = self._pulse_color((200, 40, 40), (255, 80, 80), tick, 50)
+            title_txt = "GAME OVER"
+            sub_txt   = "You were defeated by the Arcane Boss..."
+        else:
+            title_col = self._pulse_color(GOLD, (255, 240, 180), tick, 50)
+            title_txt = "VICTORY!"
+            sub_txt   = "The Arcane Boss has been vanquished!"
+
+        # Expanding ring animation
+        ring_r = int(80 + tick * 1.2) % 300
+        ring_col = self._pulse_color(tuple(c // 3 for c in title_col), title_col, tick, 40)
+        pygame.draw.circle(self.screen, ring_col, (W // 2, H // 2), ring_r, 2)
+        pygame.draw.circle(self.screen, ring_col, (W // 2, H // 2), max(1, ring_r - 20), 1)
+
+        # Title
+        tf = pygame.font.SysFont(None, 80)
+        title_surf = tf.render(title_txt, True, title_col)
+        shadow_surf = tf.render(title_txt, True, (0, 0, 0))
+        tc = title_surf.get_rect(center=(W // 2, H // 2 - 60))
+        self.screen.blit(shadow_surf, (tc.x + 4, tc.y + 4))
+        self.screen.blit(title_surf, tc)
+
+        # Subtitle
+        sub_surf = self.font_big.render(sub_txt, True, GREY)
+        self.screen.blit(sub_surf, sub_surf.get_rect(center=(W // 2, H // 2 + 20)))
+
+        # Prompt (blink)
+        if (tick // 30) % 2 == 0:
+            prompt = self.font.render("Press ENTER or SPACE to return to menu", True, WHITE)
+            self.screen.blit(prompt, prompt.get_rect(center=(W // 2, H // 2 + 70)))
+
+        pygame.display.flip()
+
     # ── Background ─────────────────────────────────────────────────────────────
 
-    def _draw_bg(self) -> None:
+    def _draw_bg(self, player_offset_x: float = 0.0) -> None:
         W, H = self.W, self.H
         horizon = H // 2
 
@@ -170,7 +218,9 @@ class FPRenderer:
         # Horizon accent line
         pygame.draw.line(self.screen, RUNE_DIM, (0, horizon), (W, horizon), 1)
 
-        vx, vy = W // 2, horizon
+        # Parallax: vanishing point shifts slightly opposite to player movement
+        vx_shift = int(-player_offset_x * W * 0.07)
+        vx, vy = W // 2 + vx_shift, horizon
 
         # Perspective floor grid
         for i in range(1, 9):
@@ -181,7 +231,7 @@ class FPRenderer:
             line_col = (alpha, alpha // 2, alpha * 2)
             pygame.draw.line(self.screen, line_col, (vx - spread, fy), (vx + spread, fy), 1)
 
-        # Converging side lines
+        # Converging side lines (from vanishing point)
         for i in range(-5, 6):
             floor_x = W // 2 + i * (W // 10)
             pygame.draw.line(self.screen, (18, 10, 32), (vx, vy), (floor_x, H), 1)
@@ -192,8 +242,9 @@ class FPRenderer:
         pygame.draw.circle(self.screen, rc, (vx, vy), rune_r, 2)
         pygame.draw.circle(self.screen, rc, (vx, vy), max(1, rune_r - 18), 1)
 
-        # Pillars
-        for px in (W // 6, W * 5 // 6):
+        # Pillars (shift more than vanishing point — closer to viewer)
+        pillar_shift = int(-player_offset_x * W * 0.13)
+        for px in (W // 6 + pillar_shift, W * 5 // 6 + pillar_shift):
             self._draw_pillar(px, horizon, H)
 
     def _draw_pillar(self, cx: int, top_y: int, H: int) -> None:
@@ -209,9 +260,11 @@ class FPRenderer:
 
     # ── Boss ───────────────────────────────────────────────────────────────────
 
-    def _draw_boss(self, hp_ratio: float, effects: List[dict]) -> None:
+    def _draw_boss(self, hp_ratio: float, effects: List[dict], player_offset_x: float = 0.0) -> None:
         W, H = self.W, self.H
-        cx, cy = W // 2, H // 2 - 28
+        # Boss is far away — very small parallax shift
+        boss_shift = int(-player_offset_x * W * 0.03)
+        cx, cy = W // 2 + boss_shift, H // 2 - 28
 
         # Pulsing outer aura
         aura_r = int(76 + 9 * math.sin(self._tick * 0.05))
@@ -261,10 +314,12 @@ class FPRenderer:
 
     # ── Wand ───────────────────────────────────────────────────────────────────
 
-    def _draw_wand(self) -> None:
+    def _draw_wand(self, player_offset_x: float = 0.0) -> None:
         W, H = self.W, self.H
-        wx_b, wy_b = int(W * 0.82), H + 10
-        wx_t, wy_t = int(W * 0.61), int(H * 0.71)
+        # Wand shifts with player (close to camera — large parallax)
+        wand_shift = int(player_offset_x * W * 0.06)
+        wx_b, wy_b = int(W * 0.82) + wand_shift, H + 10
+        wx_t, wy_t = int(W * 0.61) + wand_shift, int(H * 0.71)
 
         # Wand shaft (wood)
         pygame.draw.line(self.screen, (60, 38, 16),  (wx_b, wy_b), (wx_t, wy_t), 8)
@@ -278,15 +333,20 @@ class FPRenderer:
 
     # ── Effects ────────────────────────────────────────────────────────────────
 
-    def _draw_effects(self, effects: List[dict]) -> None:
+    def _draw_effects(self, effects: List[dict], player_offset_x: float = 0.0) -> None:
         W, H = self.W, self.H
-        wand_tip   = (int(W * 0.61), int(H * 0.71))
-        boss_center = (W // 2, H // 2 - 28)
+        wand_shift  = int(player_offset_x * W * 0.06)
+        boss_shift  = int(-player_offset_x * W * 0.03)
+        wand_tip    = (int(W * 0.61) + wand_shift, int(H * 0.71))
+        boss_center = (W // 2 + boss_shift, H // 2 - 28)
 
         for e in effects:
-            if e["type"] == "proj":
+            etype = e["type"]
+
+            if etype == "proj":
                 t = max(0.0, min(1.0, e["elapsed"] / float(e["dur"])))
                 color = e["color"]
+                style = e.get("style", "fire")
                 r     = e.get("r", 8)
 
                 if e.get("origin") == "player":
@@ -294,7 +354,6 @@ class FPRenderer:
                     ex, ey = boss_center
                     draw_r = max(3, int(r * (1.0 - t * 0.25)))
                 else:
-                    # Boss projectile comes towards camera (grows and drifts down)
                     sx, sy = boss_center
                     ex, ey = W // 2, H + 60
                     draw_r = max(3, int(r * (0.4 + t * 1.8)))
@@ -302,25 +361,82 @@ class FPRenderer:
                 px = int(sx + (ex - sx) * t)
                 py = int(sy + (ey - sy) * t)
 
-                # Glow + core
                 self._draw_glow(px, py, draw_r + 5, color, layers=4)
                 pygame.draw.circle(self.screen, color, (px, py), draw_r)
 
-                # Motion trail
                 for step in range(1, 5):
                     trail_t = max(0.0, t - step * 0.045)
                     tx2 = int(sx + (ex - sx) * trail_t)
                     ty2 = int(sy + (ey - sy) * trail_t)
                     tr = max(1, draw_r - step * 2)
                     tc = tuple(max(0, int(c * (1.0 - step * 0.22))) for c in color)
-                    pygame.draw.circle(self.screen, tc, (tx2, ty2), tr)
 
-            elif e["type"] == "ring":
+                    if style in ("wind", "lightning"):
+                        pygame.draw.line(
+                            self.screen, tc,
+                            (tx2 - tr * 2, ty2), (tx2 + tr * 2, ty2),
+                            max(1, tr // 2),
+                        )
+                    elif style == "earth":
+                        pygame.draw.rect(self.screen, tc, (tx2 - tr, ty2 - tr, tr * 2, tr * 2))
+                    else:
+                        pygame.draw.circle(self.screen, tc, (tx2, ty2), tr)
+
+            elif etype == "cast":
+                t = max(0.0, min(1.0, e["elapsed"] / float(e["dur"])))
+                cx, cy = wand_tip
+                r = int(e["r0"] + (e["r1"] - e["r0"]) * t)
+                fade = max(0.0, 1.0 - t)
+                col = tuple(int(c * fade) for c in e["color"])
+
+                self._draw_glow(cx, cy, r, col, layers=5)
+                pygame.draw.circle(self.screen, col, (cx, cy), max(2, r // 3))
+                pygame.draw.circle(self.screen, col, (cx, cy), max(5, r), 1)
+
+            elif etype == "impact":
+                t = max(0.0, min(1.0, e["elapsed"] / float(e["dur"])))
+                cx, cy = boss_center
+                r = int(e["r0"] + (e["r1"] - e["r0"]) * t)
+                fade = max(0.0, 1.0 - t)
+                col = tuple(int(c * fade) for c in e["color"])
+                style = e.get("style", "fire")
+
+                self._draw_glow(cx, cy, r, col, layers=4)
+                pygame.draw.circle(self.screen, col, (cx, cy), r, 2)
+
+                if style == "fire":
+                    for i in range(6):
+                        ang = self._tick * 0.08 + i * 1.04
+                        fpx = int(cx + math.cos(ang) * r * 0.7)
+                        fpy = int(cy + math.sin(ang) * r * 0.45)
+                        pygame.draw.circle(self.screen, col, (fpx, fpy), max(1, 5 - int(t * 4)))
+                elif style == "water":
+                    pygame.draw.circle(self.screen, col, (cx, cy), max(3, r // 2), 1)
+                elif style == "wind":
+                    pygame.draw.circle(self.screen, col, (cx, cy), r, 1)
+                    pygame.draw.circle(self.screen, col, (cx, cy), max(4, r - 8), 1)
+                elif style == "earth":
+                    for i in range(5):
+                        epx = cx + (i - 2) * 8
+                        epy = cy + 8 + (i % 2) * 6
+                        pygame.draw.rect(self.screen, col, (epx, epy, 6, 6))
+                elif style == "dark":
+                    pygame.draw.circle(self.screen, col, (cx, cy), max(4, r // 2))
+                elif style in ("lightning", "boss"):
+                    pygame.draw.line(self.screen, col, (cx - r, cy), (cx + r, cy), 2)
+                    pygame.draw.line(self.screen, col, (cx, cy - r // 2), (cx, cy + r // 2), 2)
+
+            elif etype == "ring":
                 t = max(0.0, min(1.0, e["elapsed"] / float(e["dur"])))
                 r = int(e["r0"] + (e["r1"] - e["r0"]) * t)
                 cx_w = int(W * 0.61)
                 cy_w = int(H * 0.71)
-                pygame.draw.circle(self.screen, e["color"], (cx_w, cy_w), r, e["w"])
+                fade = max(0.0, 1.0 - t)
+                col = tuple(int(v * fade) for v in e["color"])
+
+                self._draw_glow(cx_w, cy_w, max(8, r // 2), col, layers=4)
+                pygame.draw.circle(self.screen, col, (cx_w, cy_w), r, e["w"])
+                pygame.draw.circle(self.screen, col, (cx_w, cy_w), max(8, r - 10), 1)
 
     # ── Shield vignette ────────────────────────────────────────────────────────
 
