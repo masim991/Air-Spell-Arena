@@ -54,7 +54,9 @@ def run() -> int:
         while running:
             # 1) 카메라 1프레임 처리
             if USE_HAND_TRACKING:
-                if not run_vision_loop(cap, traj_buffer, show_debug=SHOW_DEBUG_WINDOWS):
+                if not run_vision_loop(cap, traj_buffer,
+                                       gesture_analyzer=analyzer,
+                                       show_debug=SHOW_DEBUG_WINDOWS):
                     break
             else:
                 data = canvas.update()
@@ -63,12 +65,22 @@ def run() -> int:
                 # HSV 경로에서는 center를 data에서 공급
                 traj_buffer.update(data.center)
 
-            # 3) 방금 완료된 궤적이 있으면 주문으로 분류
+            # 3a) 포즈 기반 주문 (FIRE/WATER/EARTH/WIND) — run_vision_loop에서 포스팅
             spell_name: Optional[str] = None
+            if USE_HAND_TRACKING:
+                pose_spell = getattr(run_vision_loop, "_last_pose_spell", None)
+                if pose_spell:
+                    spell_name = pose_spell
+                    setattr(run_vision_loop, "_last_pose_spell", None)
+
+            # 3b) 트래젝토리 기반 주문 (LIGHT/DARK/CIRCLE/ZIGZAG)
             traj = traj_buffer.poll_last_closed()
-            if traj:
+            if traj and spell_name is None:
                 basic_spell = analyzer.classify(traj)
-                spell_name = combo_engine.push_basic_spell(basic_spell, cv2.getTickCount() / cv2.getTickFrequency())
+                if basic_spell not in ("UNKNOWN",):
+                    spell_name = combo_engine.push_basic_spell(
+                        basic_spell, cv2.getTickCount() / cv2.getTickFrequency()
+                    )
 
             # 4) 게임 1프레임 진행(이벤트 처리 + 주문 적용 + 렌더)
             head_dir = getattr(run_vision_loop, "_last_head_dir", None) if USE_HAND_TRACKING else None

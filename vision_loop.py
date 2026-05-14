@@ -35,6 +35,7 @@ from trajectory import TrajectoryBuffer
 def run_vision_loop(
     cap: cv2.VideoCapture,
     trajectory_buffer: TrajectoryBuffer,
+    gesture_analyzer=None,
     show_debug: bool = True,
 ) -> bool:
     """카메라에서 1프레임을 읽어 MediaPipe Hands로 center를 계산하고 버퍼에 공급.
@@ -76,9 +77,10 @@ def run_vision_loop(
     results = hands.process(img_rgb)
     annotated = frame.copy()
     center = None
+    hand_lm = None
     if results.multi_hand_landmarks:
         hand_landmarks = results.multi_hand_landmarks[0]
-        # 랜드마크 그리기(가능한 경우)
+        hand_lm = hand_landmarks.landmark
         try:
             mp_drawing.draw_landmarks(
                 annotated,
@@ -89,11 +91,36 @@ def run_vision_loop(
             )
         except Exception:
             pass
-        tip = hand_landmarks.landmark[mp_hands.HandLandmark.INDEX_FINGER_TIP]
+        tip = hand_lm[mp_hands.HandLandmark.INDEX_FINGER_TIP]
         x = int(np.clip(tip.x * w0, 0, w0 - 1))
         y = int(np.clip(tip.y * h0, 0, h0 - 1))
         center = (x, y)
         cv2.circle(annotated, center, 8, (0, 255, 255), 2)
+
+    # 포즈 인식 (FIRE/WATER/EARTH/WIND)
+    if gesture_analyzer is not None:
+        pose_spell = gesture_analyzer.update_pose(hand_lm)
+        if pose_spell:
+            setattr(run_vision_loop, "_last_pose_spell", pose_spell)
+
+        # 디버그 오버레이: 현재 포즈 + 진행 바
+        _pose_colors = {
+            "FIRE": (30, 140, 255), "WATER": (255, 150, 50),
+            "EARTH": (80, 180, 80), "WIND": (200, 200, 200),
+        }
+        cur_pose = gesture_analyzer._current_pose
+        progress = gesture_analyzer.pose_progress
+        if cur_pose:
+            col = _pose_colors.get(cur_pose, (200, 200, 200))
+            label = f"POSE: {cur_pose}  {int(progress*100)}%"
+            cv2.putText(annotated, label, (16, 72),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.75, col, 2, cv2.LINE_AA)
+            bar_full = int(w0 * 0.35)
+            bar_fill = int(bar_full * progress)
+            cv2.rectangle(annotated, (16, 82), (16 + bar_full, 94), (50, 50, 50), -1)
+            if bar_fill > 0:
+                cv2.rectangle(annotated, (16, 82), (16 + bar_fill, 94), col, -1)
+            cv2.rectangle(annotated, (16, 82), (16 + bar_full, 94), col, 1)
     # 손가락 좌표 EMA(지수 이동 평균)로 떨림 감소 + 최소 이동 임계치 적용
     ema = getattr(run_vision_loop, "_ema_center", None)
     prev_center = getattr(run_vision_loop, "_prev_center", None)

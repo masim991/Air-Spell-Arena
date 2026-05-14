@@ -84,6 +84,18 @@ ELEMENT_PRESETS = {
 }
 
 
+# 마법진 색상 매핑 (원소별)
+MAGIC_CIRCLE_COLORS = {
+    "FIRE":      (220,  55,  35),
+    "WATER":     ( 40, 110, 255),
+    "EARTH":     (160,  95,  30),
+    "WIND":      ( 55, 195, 100),
+    "LIGHT":     (235, 235, 245),
+    "DARK":      (140, 145, 165),
+    "LIGHTNING": ( 80, 200, 255),
+    "SHIELD":    ( 80, 210, 255),
+}
+
 # 난이도별 보스 회피 확률
 DIFFICULTY_PROB = {
     "easy": 0.20,
@@ -145,9 +157,10 @@ class SpellGame:
         self.message_color = WHITE
 
         # 상태/메뉴
-        self._state = "menu"  # 'menu' | 'playing' | 'game_over' | 'you_win'
+        self._state = "menu"  # 'menu' | 'tutorial' | 'playing' | 'game_over' | 'you_win'
         self._btn_start = pygame.Rect(SCREEN_W//2 - 120, SCREEN_H//2 - 30, 110, 50)
         self._btn_exit  = pygame.Rect(SCREEN_W//2 + 10,  SCREEN_H//2 - 30, 110, 50)
+        self._btn_guide = pygame.Rect(SCREEN_W//2 - 55,  SCREEN_H//2 + 38,  110, 38)
 
         # 이펙트
         self._effects: List[dict] = []
@@ -157,8 +170,9 @@ class SpellGame:
 
         # 저장된 난이도(리셋 후 유지)
         self._saved_difficulty = "normal"
-        # 엔딩 화면 틱 카운터
-        self._tick_ending = 0
+        # 엔딩/튜토리얼 화면 틱 카운터
+        self._tick_ending  = 0
+        self._tick_tutorial = 0
 
     # ── 퍼블릭 API ──────────────────────────────────────────────────────────
 
@@ -192,12 +206,23 @@ class SpellGame:
                         self.set_difficulty("impossible")
                     self._saved_difficulty = self.difficulty
                     self._toast(f"Difficulty: {self.difficulty}", WHITE)
+                if event.type == pygame.KEYDOWN and event.key == pygame.K_g:
+                    self._state = "tutorial"
+                    self._tick_tutorial = 0
                 if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                     mx, my = event.pos
                     if self._btn_start.collidepoint(mx, my):
                         self._state = "playing"
                     elif self._btn_exit.collidepoint(mx, my):
                         return False
+                    elif self._btn_guide.collidepoint(mx, my):
+                        self._state = "tutorial"
+                        self._tick_tutorial = 0
+            elif self._state == "tutorial":
+                if event.type == pygame.KEYDOWN and event.key in (
+                    pygame.K_RETURN, pygame.K_SPACE, pygame.K_ESCAPE, pygame.K_g
+                ):
+                    self._state = "menu"
             elif self._state in ("game_over", "you_win"):
                 if event.type == pygame.KEYDOWN and event.key in (pygame.K_RETURN, pygame.K_SPACE):
                     self._reset_game()
@@ -206,6 +231,11 @@ class SpellGame:
         if self._state == "menu":
             self.clock.tick(FPS)
             self._render_menu()
+            return True
+        if self._state == "tutorial":
+            self.clock.tick(FPS)
+            self._fp.render_tutorial(self._tick_tutorial)
+            self._tick_tutorial += 1
             return True
         if self._state in ("game_over", "you_win"):
             self.clock.tick(FPS)
@@ -251,6 +281,7 @@ class SpellGame:
                 style=p["style"],
             )
             self._spawn_cast_effect(p["color"], p["style"])
+            self._spawn_magic_circle("FIRE")
             self._toast("FIRE!", YELLOW)
             return SpellResult("FIRE", True)
 
@@ -264,6 +295,7 @@ class SpellGame:
                 style=p["style"],
             )
             self._spawn_cast_effect(p["color"], p["style"])
+            self._spawn_magic_circle("WATER")
             self._toast("WATER!", BLUE)
             return SpellResult("WATER", True)
 
@@ -277,6 +309,7 @@ class SpellGame:
                 style=p["style"],
             )
             self._spawn_cast_effect(p["color"], p["style"])
+            self._spawn_magic_circle("WIND")
             self._toast("WIND!", GREEN)
             return SpellResult("WIND", True)
 
@@ -290,6 +323,7 @@ class SpellGame:
                 style=p["style"],
             )
             self._spawn_cast_effect(p["color"], p["style"])
+            self._spawn_magic_circle("EARTH")
             self._toast("EARTH!", GREY)
             return SpellResult("EARTH", True)
 
@@ -303,6 +337,7 @@ class SpellGame:
                 style=p["style"],
             )
             self._spawn_cast_effect(p["color"], p["style"])
+            self._spawn_magic_circle("DARK")
             self._toast("DARK!", PURPLE)
             return SpellResult("DARK", True)
 
@@ -310,6 +345,7 @@ class SpellGame:
             self.shield_time_left = SHIELD_DURATION_MS
             self._spawn_shield_ring()
             self._spawn_cast_effect(CYAN, "light")
+            self._spawn_magic_circle("LIGHT")
             self._toast(f"SHIELD ({SHIELD_DURATION_MS // 1000}s)", CYAN)
             return SpellResult("SHIELD", True)
 
@@ -325,6 +361,7 @@ class SpellGame:
                     style=p["style"],
                 )
                 self._spawn_cast_effect(p["color"], p["style"])
+                self._spawn_magic_circle("LIGHTNING")
                 self._toast("LIGHTNING!", BLUE)
                 return SpellResult("LIGHTNING", True)
             self._toast("LIGHTNING (cooldown)", GREY)
@@ -430,6 +467,7 @@ class SpellGame:
         self._fp.render_menu(
             btn_start=self._btn_start,
             btn_exit=self._btn_exit,
+            btn_guide=self._btn_guide,
             difficulty=self.difficulty,
         )
 
@@ -495,6 +533,16 @@ class SpellGame:
             "dur": 180,
             "r0": 10,
             "r1": 34,
+        })
+
+    def _spawn_magic_circle(self, element: str) -> None:
+        color = MAGIC_CIRCLE_COLORS.get(element, (180, 180, 200))
+        self._effects.append({
+            "type": "magic_circle",
+            "element": element,
+            "color": color,
+            "elapsed": 0,
+            "dur": 1800,
         })
 
     def _spawn_impact_effect(self, color: Tuple[int, int, int], style: str, hit: bool) -> None:

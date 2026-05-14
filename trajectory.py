@@ -12,9 +12,9 @@ Trajectory = List[Point]
 class TrajectoryConfig:
     """궤적(스트로크) 종료/보관 관련 설정."""
 
-    disappear_frames_to_close: int = 3
+    disappear_frames_to_close: int = 2
     max_trajectories: int = 10
-    min_points_to_keep: int = 8
+    min_points_to_keep: int = 4
 
 
 class TrajectoryBuffer:
