@@ -29,12 +29,19 @@ _NOSE_TIP    = 4    # 코끝
 _LEFT_CHEEK  = 234  # 왼쪽 볼 외곽
 _RIGHT_CHEEK = 454  # 오른쪽 볼 외곽
 
-# Hysteresis thresholds (face-width-normalised offset, [-1 … 1])
-# 얼굴 폭 대비 코 offset.  selfie-flipped 이미지에서:
-#   좌로 고개 → offset < 0 → "LEFT",  우로 고개 → offset > 0 → "RIGHT"
-_ENTER = 0.11   # 이 값을 넘으면 L/R 진입
-_EXIT  = 0.04   # 이 값 이내로 돌아와야 CENTER 복귀 (히스테리시스)
-_MIN_HOLD = 5   # 방향 유지 최소 프레임 수 (1인칭 진동 방지)
+# 코끝 절대 위치 기반 감지 임계값 (정규화된 화면 좌표 [0,1] 기준)
+# selfie-flipped 이미지에서:
+#   코끝이 중심보다 왼쪽 → offset < 0 → "LEFT"
+#   코끝이 중심보다 오른쪽 → offset > 0 → "RIGHT"
+_ENTER = 0.045   # 화면폭의 4.5% 이탈 시 방향 진입
+_EXIT  = 0.018   # 화면폭의 1.8% 이내 복귀 시 CENTER 복귀 (히스테리시스)
+_MIN_HOLD = 3    # 방향 유지 최소 프레임 수 (진동 방지)
+
+_CENTER_EMA_ALPHA = 0.012  # 적응형 중심 보정 속도 (CENTER 상태일 때만 갱신)
+_NO_FACE_HOLD     = 20    # 얼굴 미감지 시 방향 유지 최대 프레임 수
+_EMA_FAST  = 0.55         # 빠르게 움직일 때 EMA 알파
+_EMA_SLOW  = 0.28         # 안정적일 때 EMA 알파
+_VEL_THRESH = 0.004       # 속도 임계 (정규화 좌표)
 
 
 class HeadTracker:
@@ -50,11 +57,10 @@ class HeadTracker:
     def __init__(
         self,
         max_num_faces: int = 1,
-        min_detection_confidence: float = 0.6,
-        min_tracking_confidence: float = 0.6,
+        min_detection_confidence: float = 0.55,
+        min_tracking_confidence: float = 0.50,
         refine_landmarks: bool = False,
-        ema_alpha: float = 0.40,
-        smooth_window: int = 3,
+        smooth_window: int = 5,
         draw_mesh: bool = False,
     ) -> None:
         self._face_mesh = mp_face_mesh.FaceMesh(
@@ -64,15 +70,20 @@ class HeadTracker:
             min_detection_confidence=min_detection_confidence,
             min_tracking_confidence=min_tracking_confidence,
         )
-        self.ema_alpha   = float(np.clip(ema_alpha, 0.01, 1.0))
-        self.draw_mesh   = draw_mesh
+        self.draw_mesh = draw_mesh
 
-        self._ema_offset: Optional[float]    = None
-        self._history:    Deque[float]        = deque(maxlen=max(1, smooth_window))
+        self._ema_offset: Optional[float]  = None
+        self._prev_offset: Optional[float] = None
+        self._history:     Deque[float]    = deque(maxlen=max(1, smooth_window))
 
         # 히스테리시스 상태
-        self._last_dir:   str = "CENTER"
-        self._hold:       int = 0
+        self._last_dir:       str = "CENTER"
+        self._hold:           int = 0
+        self._no_face_frames: int = 0
+
+        # 코끝 적응형 중심 + 얼굴 폭 참고값
+        self._nose_cx:   float = 0.5
+        self._face_width: float = 0.30  # 초기 추정값
 
     # ── Public ─────────────────────────────────────────────────────────────────
 
@@ -92,8 +103,13 @@ class HeadTracker:
         results   = self._face_mesh.process(img_rgb)
 
         if not results.multi_face_landmarks:
-            return annotated, self._last_dir  # 이전 방향 유지
+            self._no_face_frames += 1
+            if self._no_face_frames > _NO_FACE_HOLD:
+                self._last_dir = "CENTER"
+                self._ema_offset = None
+            return annotated, self._last_dir
 
+        self._no_face_frames = 0
         lm = results.multi_face_landmarks[0].landmark
 
         if self.draw_mesh:
@@ -105,22 +121,31 @@ class HeadTracker:
                 connection_drawing_spec=mp_styles.get_default_face_mesh_contours_style(),
             )
 
-        # ── 얼굴 폭 정규화 offset 계산 ────────────────────────────────────────
-        nose_x   = float(np.clip(lm[_NOSE_TIP].x,    0.0, 1.0))
-        nose_y   = float(np.clip(lm[_NOSE_TIP].y,    0.0, 1.0))
-        left_x   = float(np.clip(lm[_LEFT_CHEEK].x,  0.0, 1.0))
-        right_x  = float(np.clip(lm[_RIGHT_CHEEK].x, 0.0, 1.0))
+        # ── 코끝 위치 + 얼굴 폭 추출 ───────────────────────────────────────
+        nose_x  = float(np.clip(lm[_NOSE_TIP].x, 0.0, 1.0))
+        nose_y  = float(np.clip(lm[_NOSE_TIP].y, 0.0, 1.0))
+        left_x  = float(np.clip(lm[_LEFT_CHEEK].x,  0.0, 1.0))
+        right_x = float(np.clip(lm[_RIGHT_CHEEK].x, 0.0, 1.0))
+        face_w  = abs(right_x - left_x)
+        if face_w > 0.05:  # 유효한 얼굴 폭일 때만 갱신
+            self._face_width = 0.95 * self._face_width + 0.05 * face_w
 
-        face_cx  = (left_x + right_x) * 0.5
-        face_w   = max(abs(right_x - left_x), 0.01)
-        raw_off  = (nose_x - face_cx) / face_w
+        # 적응형 중심: CENTER 상태일 때만 천천히 보정
+        if self._last_dir == "CENTER":
+            self._nose_cx = (1.0 - _CENTER_EMA_ALPHA) * self._nose_cx + _CENTER_EMA_ALPHA * nose_x
 
-        # EMA 스무딩
+        # 중심 대비 상대 편차 (양수 = 오른쪽)
+        raw_off  = nose_x - self._nose_cx
+
+        # 속도 기반 적응형 EMA 알파 선택
+        vel = abs(raw_off - self._prev_offset) if self._prev_offset is not None else 0.0
+        ema_a = _EMA_FAST if vel > _VEL_THRESH else _EMA_SLOW
+        self._prev_offset = raw_off
+
         if self._ema_offset is None:
             self._ema_offset = raw_off
         else:
-            a = self.ema_alpha
-            self._ema_offset = a * raw_off + (1.0 - a) * self._ema_offset
+            self._ema_offset = ema_a * raw_off + (1.0 - ema_a) * self._ema_offset
 
         self._history.append(self._ema_offset)
         smooth = sum(self._history) / len(self._history)
@@ -131,31 +156,23 @@ class HeadTracker:
         # ── 디버그 오버레이 ────────────────────────────────────────────────────
         px  = int(nose_x * w)
         py  = int(nose_y * h)
-        fcx = int(face_cx * w)
+        ncx = int(self._nose_cx * w)  # 적응형 중심
 
-        cv2.circle(annotated, (px, py), 6, (0, 255, 255), -1)
-        cv2.line(annotated, (fcx, 0), (fcx, h), (200, 200, 0), 1)
+        cv2.circle(annotated, (px, py), 9, (0, 255, 255), -1)   # 코끝 마크 (밝은 파랑)
+        cv2.line(annotated, (ncx, 0), (ncx, h), (0, 220, 0), 1)  # 보정 중심 (녹색)
 
-        # offset bar
-        bar_x = int((face_cx + smooth * face_w) * w)
+        # 현재 offset 위치 바
+        bar_x = int((self._nose_cx + smooth) * w)
         cv2.line(annotated, (bar_x, 0), (bar_x, h), (255, 100, 0), 2)
 
-        # enter/exit threshold lines
-        cv2.line(annotated, (int((face_cx - _ENTER * face_w) * w), 0),
-                 (int((face_cx - _ENTER * face_w) * w), h), (0, 200, 0), 1)
-        cv2.line(annotated, (int((face_cx + _ENTER * face_w) * w), 0),
-                 (int((face_cx + _ENTER * face_w) * w), h), (0, 200, 0), 1)
+        # ENTER 임계 라인 (±ENTER)
+        cv2.line(annotated, (int((self._nose_cx - _ENTER) * w), 0),
+                 (int((self._nose_cx - _ENTER) * w), h), (0, 180, 0), 1)
+        cv2.line(annotated, (int((self._nose_cx + _ENTER) * w), 0),
+                 (int((self._nose_cx + _ENTER) * w), h), (0, 180, 0), 1)
 
-        cv2.putText(
-            annotated,
-            f"HEAD: {head_dir}  off={smooth:+.3f}",
-            (16, 40),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.8,
-            (0, 255, 255),
-            2,
-            cv2.LINE_AA,
-        )
+        cv2.putText(annotated, f"HEAD: {head_dir}  off={smooth:+.3f}  fw={self._face_width:.2f}",
+                    (16, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.75, (0, 255, 255), 2, cv2.LINE_AA)
         return annotated, head_dir
 
     def close(self) -> None:

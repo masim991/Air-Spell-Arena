@@ -6,6 +6,7 @@ from typing import Optional, Tuple, List
 import math
 import random
 import pygame
+from audio_manager import AudioManager, ALL_SLOTS
 from fp_renderer import FPRenderer
 
 
@@ -134,15 +135,16 @@ class SpellGame:
         self.player_hp = PLAYER_MAX_HP
         self.boss_hp = BOSS_MAX_HP
 
-        self.player_pos = (150, SCREEN_H // 2)
+        self.player_pos = (SCREEN_W // 2, SCREEN_H // 2)
         self.boss_pos = (SCREEN_W - 150, SCREEN_H // 2)
         self.player_r = 40
         self.boss_r = 48
         # 부동소수 좌표(헤드 무브 스무딩용)
         self._player_fx, self._player_fy = float(self.player_pos[0]), float(self.player_pos[1])
-        self._player_speed_px_s = 520.0
+        self._player_speed_px_s = 480.0
         self._arena_min_x = self.player_r + 30
         self._arena_max_x = SCREEN_W - (self.player_r + 30)
+        self._player_center_x = float(SCREEN_W // 2)  # 기본 복귀 중심
 
         # 효과/버프/쿨다운
         self.shield_time_left = 0
@@ -158,9 +160,20 @@ class SpellGame:
 
         # 상태/메뉴
         self._state = "menu"  # 'menu' | 'tutorial' | 'playing' | 'game_over' | 'you_win'
-        self._btn_start = pygame.Rect(SCREEN_W//2 - 120, SCREEN_H//2 - 30, 110, 50)
-        self._btn_exit  = pygame.Rect(SCREEN_W//2 + 10,  SCREEN_H//2 - 30, 110, 50)
-        self._btn_guide = pygame.Rect(SCREEN_W//2 - 55,  SCREEN_H//2 + 38,  110, 38)
+        _cx = SCREEN_W // 2
+        _by = SCREEN_H // 2 - 18
+        self._btn_start    = pygame.Rect(_cx - 135, _by,        270, 54)
+        self._btn_exit     = pygame.Rect(_cx - 80,  _by + 68,   160, 42)
+        self._btn_guide    = pygame.Rect(_cx - 135, _by + 124,  130, 38)
+        self._btn_settings = pygame.Rect(_cx + 5,   _by + 124,  130, 38)
+
+        # 오디오 매니저
+        self._audio = AudioManager()
+
+        # 설정 화면 상태
+        self._settings_pending: dict = {s: None for s in ALL_SLOTS}
+        self._settings_active_slot: str = "bgm"
+        self._settings_clickables: list = []
 
         # 이펙트
         self._effects: List[dict] = []
@@ -186,12 +199,17 @@ class SpellGame:
         Returns:
             계속 실행하려면 True, 창 종료/ESC 시 False.
         """
+        _prev_state = self._state
+
         # 이벤트 처리
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 return False
             if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
-                return False
+                if self._state == "settings":
+                    self._state = "menu"
+                else:
+                    return False
             if self._state == "menu":
                 if event.type == pygame.KEYDOWN and event.key in (pygame.K_RETURN, pygame.K_SPACE):
                     self._state = "playing"
@@ -218,6 +236,30 @@ class SpellGame:
                     elif self._btn_guide.collidepoint(mx, my):
                         self._state = "tutorial"
                         self._tick_tutorial = 0
+                    elif self._btn_settings.collidepoint(mx, my):
+                        self._audio.refresh()
+                        self._settings_pending = {s: self._audio.get_selected(s) for s in ALL_SLOTS}
+                        self._settings_active_slot = "bgm"
+                        self._state = "settings"
+            elif self._state == "settings":
+                if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                    mx, my = event.pos
+                    for rect, action, value in self._settings_clickables:
+                        if rect.collidepoint(mx, my):
+                            if action == "back":
+                                self._state = "menu"
+                            elif action == "save":
+                                for slot in ALL_SLOTS:
+                                    self._audio.set_selected(slot, self._settings_pending.get(slot))
+                                self._audio.save_config()
+                                self._state = "menu"
+                            elif action == "slot_tab":
+                                self._settings_active_slot = value
+                            elif action in ALL_SLOTS:
+                                self._settings_pending[action] = value
+                            elif action == "preview" and value:
+                                self._audio.preview(value)
+                            break
             elif self._state == "tutorial":
                 if event.type == pygame.KEYDOWN and event.key in (
                     pygame.K_RETURN, pygame.K_SPACE, pygame.K_ESCAPE, pygame.K_g
@@ -227,10 +269,18 @@ class SpellGame:
                 if event.type == pygame.KEYDOWN and event.key in (pygame.K_RETURN, pygame.K_SPACE):
                     self._reset_game()
 
-        # 엔딩/메뉴 상태는 게임 로직 없이 렌더만
+        # 엔딩/메뉴/설정 상태는 게임 로직 없이 렌더만
         if self._state == "menu":
             self.clock.tick(FPS)
             self._render_menu()
+            return True
+        if self._state == "settings":
+            self.clock.tick(FPS)
+            self._settings_clickables = self._fp.render_settings(
+                files=self._audio.files,
+                pending=self._settings_pending,
+                active_slot=self._settings_active_slot,
+            )
             return True
         if self._state == "tutorial":
             self.clock.tick(FPS)
@@ -250,7 +300,9 @@ class SpellGame:
 
         # 주문 적용(플레이어 현재 위치에서 투사체가 출발하도록 이동 이후에 적용)
         if spell_name:
-            self.apply_spell(spell_name)
+            _result = self.apply_spell(spell_name)
+            if _result.applied:
+                self._audio.play_spell_sfx(_result.name)
 
         # 나머지 업데이트
         self._update_boss_ai(dt)
@@ -263,6 +315,12 @@ class SpellGame:
         elif self.player_hp <= 0 and self._state == "playing":
             self._state = "game_over"
             self._tick_ending = 0
+
+        # BGM 상태 전환 처리
+        if _prev_state != "playing" and self._state == "playing":
+            self._audio.play_bgm()
+        elif _prev_state == "playing" and self._state != "playing":
+            self._audio.stop_bgm()
 
         # 렌더
         self._render()
@@ -372,6 +430,7 @@ class SpellGame:
 
     def close(self) -> None:
         """게임을 종료하고 Pygame을 정리합니다."""
+        self._audio.close()
         pygame.quit()
 
     # ── 내부 로직 ───────────────────────────────────────────────────────────
@@ -415,7 +474,7 @@ class SpellGame:
         """게임 상태를 초기화하고 메뉴로 돌아갑니다."""
         self.player_hp = PLAYER_MAX_HP
         self.boss_hp   = BOSS_MAX_HP
-        self.player_pos = (150, SCREEN_H // 2)
+        self.player_pos = (SCREEN_W // 2, SCREEN_H // 2)
         self.boss_pos   = (SCREEN_W - 150, SCREEN_H // 2)
         self._player_fx = float(self.player_pos[0])
         self._player_fy = float(self.player_pos[1])
@@ -436,13 +495,16 @@ class SpellGame:
         self._boss_dodge_prob = DIFFICULTY_PROB[level]
 
     def _update_player_dodge(self, head_dir: Optional[str], dt_ms: int) -> None:
-        if head_dir not in ("LEFT", "RIGHT"):
-            # 천천히 중심으로 복귀는 생략, 정지
-            vx = 0.0
+        dt_s = dt_ms / 1000.0
+        if head_dir == "LEFT":
+            vx = -self._player_speed_px_s
+        elif head_dir == "RIGHT":
+            vx = self._player_speed_px_s
         else:
-            vx = (-1.0 if head_dir == "LEFT" else 1.0) * self._player_speed_px_s
-        self._player_fx = max(self._arena_min_x, min(self._arena_max_x, self._player_fx + vx * (dt_ms / 1000.0)))
-        # 정수 좌표로 반영
+            # CENTER: 서서히 기본 위치로 복귀 (속도의 40%)
+            diff = self._player_center_x - self._player_fx
+            vx = 0.0 if abs(diff) < 1.0 else (diff / abs(diff)) * self._player_speed_px_s * 0.4
+        self._player_fx = max(self._arena_min_x, min(self._arena_max_x, self._player_fx + vx * dt_s))
         self.player_pos = (int(round(self._player_fx)), self.player_pos[1])
 
     # ── 렌더링 ──────────────────────────────────────────────────────────────
@@ -468,6 +530,7 @@ class SpellGame:
             btn_start=self._btn_start,
             btn_exit=self._btn_exit,
             btn_guide=self._btn_guide,
+            btn_settings=self._btn_settings,
             difficulty=self.difficulty,
         )
 
@@ -491,6 +554,8 @@ class SpellGame:
         dur_ms: int,
         style: str,
     ) -> None:
+        # 시전 순간의 플레이어 오프셋을 저장 → 렌더러가 시전 위치에서 투사체를 출발시킴
+        cast_offset_x = (self._player_fx - SCREEN_W / 2) / (SCREEN_W / 2)
         self._effects.append({
             "type": "proj",
             "element": element,
@@ -506,6 +571,7 @@ class SpellGame:
             "dmg": int(dmg),
             "dodge_checked": False,
             "dodged": False,
+            "cast_offset_x": cast_offset_x,
         })
 
     def _spawn_boss_projectile(self, dmg: int) -> None:

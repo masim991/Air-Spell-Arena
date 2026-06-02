@@ -42,17 +42,31 @@ class HandState:
     landmarks_px: List[Point]
 
 
-class _LandmarkEMA:
-    def __init__(self, alpha: float) -> None:
-        self.alpha = float(np.clip(alpha, 0.01, 1.0))
+class _AdaptiveEMA:
+    """Velocity-aware EMA: fast alpha when hand moves quickly, slow alpha when stable."""
+
+    def __init__(
+        self,
+        alpha_fast: float = 0.60,
+        alpha_slow: float = 0.28,
+        vel_threshold: float = 6.0,
+    ) -> None:
+        self.alpha_fast    = float(np.clip(alpha_fast, 0.01, 1.0))
+        self.alpha_slow    = float(np.clip(alpha_slow, 0.01, 1.0))
+        self.vel_threshold = vel_threshold
         self.prev: Optional[np.ndarray] = None
 
     def update(self, pts: np.ndarray) -> np.ndarray:
         if self.prev is None:
             self.prev = pts.copy()
-        else:
-            self.prev = self.alpha * pts + (1.0 - self.alpha) * self.prev
+            return self.prev.copy()
+        vel = float(np.mean(np.linalg.norm(pts - self.prev, axis=1)))
+        alpha = self.alpha_fast if vel > self.vel_threshold else self.alpha_slow
+        self.prev = alpha * pts + (1.0 - alpha) * self.prev
         return self.prev.copy()
+
+    def reset(self) -> None:
+        self.prev = None
 
 
 class HandTracker:
@@ -93,14 +107,17 @@ class HandTracker:
     PINKY_DIP = 19
     PINKY_TIP = 20
 
+    _NO_DETECT_HOLD = 12  # frames to hold last state when hand temporarily lost
+
     def __init__(
         self,
         max_num_hands: int = 1,
-        min_detection_confidence: float = 0.7,
-        min_tracking_confidence: float = 0.7,
+        min_detection_confidence: float = 0.65,
+        min_tracking_confidence: float = 0.50,
         model_complexity: int = 1,
-        ema_alpha: float = 0.45,
-        pinch_threshold_ratio: float = 0.33,
+        ema_alpha_fast: float = 0.60,
+        ema_alpha_slow: float = 0.28,
+        pinch_threshold_ratio: float = 0.30,
         draw_landmarks: bool = True,
         draw_info: bool = True,
     ) -> None:
@@ -115,8 +132,9 @@ class HandTracker:
         self.draw_landmarks = draw_landmarks
         self.draw_info = draw_info
         self.pinch_threshold_ratio = pinch_threshold_ratio
-        self._ema = _LandmarkEMA(alpha=ema_alpha)
+        self._ema = _AdaptiveEMA(alpha_fast=ema_alpha_fast, alpha_slow=ema_alpha_slow)
         self.last_state: Optional[HandState] = None
+        self._no_detect_frames: int = 0
 
     def _norm_to_px(self, lm, w: int, h: int) -> tuple[float, float]:
         x = float(np.clip(lm.x, 0.0, 1.0) * w)
@@ -152,12 +170,14 @@ class HandTracker:
         return (float(unit[0]), float(unit[1]))
 
     def _pinch_strength(self, pts: np.ndarray, hand_size: float) -> float:
-        thumb_tip = pts[self.THUMB_TIP]
-        index_tip = pts[self.INDEX_TIP]
-        dist = float(np.linalg.norm(thumb_tip - index_tip))
+        thumb_tip  = pts[self.THUMB_TIP]
+        index_tip  = pts[self.INDEX_TIP]
+        middle_tip = pts[self.MIDDLE_TIP]
+        d_index  = float(np.linalg.norm(thumb_tip - index_tip))
+        d_middle = float(np.linalg.norm(thumb_tip - middle_tip))
+        dist  = d_index * 0.70 + d_middle * 0.30
         ratio = dist / max(hand_size, 1.0)
-        strength = 1.0 - np.clip(ratio / self.pinch_threshold_ratio, 0.0, 1.0)
-        return float(strength)
+        return float(1.0 - np.clip(ratio / self.pinch_threshold_ratio, 0.0, 1.0))
 
     def process_frame(self, frame: np.ndarray) -> tuple[np.ndarray, Optional[HandState]]:
         if frame is None or frame.size == 0:
@@ -170,9 +190,13 @@ class HandTracker:
         results = self._hands.process(rgb)
 
         if not results.multi_hand_landmarks:
-            self.last_state = None
-            return annotated, None
+            self._no_detect_frames += 1
+            if self._no_detect_frames > self._NO_DETECT_HOLD:
+                self.last_state = None
+                self._ema.reset()
+            return annotated, self.last_state
 
+        self._no_detect_frames = 0
         hand_landmarks = results.multi_hand_landmarks[0]
         handedness = None
         score = 0.0
