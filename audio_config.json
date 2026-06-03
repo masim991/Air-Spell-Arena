@@ -1,10 +1,10 @@
 {
-  "bgm": null,
-  "FIRE": "1.mp3",
-  "WATER": "4.mp3",
-  "WIND": null,
-  "EARTH": null,
-  "DARK": null,
-  "LIGHTNING": null,
-  "SHIELD": null
+  "bgm": "메인 BGM.mp3",
+  "FIRE": "Fire.mp3",
+  "WATER": "Water.mp3",
+  "WIND": "Wind.mp3",
+  "EARTH": "Earth.mp3",
+  "DARK": "Dark.mp3",
+  "LIGHTNING": "Light.mp3",
+  "SHIELD": "Light.mp3"
 }

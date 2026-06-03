@@ -14,18 +14,20 @@ from fp_renderer import FPRenderer
 SCREEN_W, SCREEN_H = 900, 600
 FPS = 60
 
-# 색상
+# Modern Neon/Cyberpunk Colors (2026 Gaming Trend)
 BLACK = (0, 0, 0)
 WHITE = (255, 255, 255)
-BG = (24, 26, 32)
-RED = (220, 66, 66)
-GREEN = (66, 200, 120)
-YELLOW = (250, 210, 50)
-BLUE = (70, 130, 250)
-CYAN = (80, 210, 255)
-GREY = (120, 130, 150)
-ORANGE = (255, 160, 60)
-PURPLE = (160, 100, 255)
+BG = (12, 6, 24)  # Darker, more atmospheric
+RED = (255, 70, 100)  # Neon Pink-Red
+GREEN = (80, 255, 150)  # Neon Mint Green
+YELLOW = (255, 230, 60)  # Electric Yellow
+BLUE = (80, 150, 255)  # Bright Sky Blue
+CYAN = (0, 240, 255)  # Electric Cyan
+GREY = (140, 145, 160)  # Cool Grey
+ORANGE = (255, 140, 40)  # Vibrant Orange
+PURPLE = (180, 100, 255)  # Neon Purple
+PINK = (255, 100, 200)  # Hot Pink
+GOLD = (255, 215, 50)  # Bright Gold
 
 # ── 게임 밸런스 상수 ──────────────────────────────────────────────────────────
 PLAYER_MAX_HP = 100
@@ -45,39 +47,47 @@ MESSAGE_DURATION_MS = 1500
 PROJECTILE_DURATION_MS = 450
 RING_DURATION_MS = 350
 
+# Enhanced Element Colors with Neon Vibrancy
+FIRE_NEON = (255, 100, 50)  # Bright Fire Orange
+WATER_NEON = (60, 180, 255)  # Bright Water Blue
+WIND_NEON = (120, 255, 180)  # Mint Wind Green
+EARTH_NEON = (200, 160, 100)  # Golden Earth
+DARK_NEON = (160, 80, 255)  # Deep Purple
+LTNG_NEON = (100, 220, 255)  # Electric Blue
+
 ELEMENT_PRESETS = {
     "FIRE": {
-        "color": ORANGE,
+        "color": FIRE_NEON,
         "style": "fire",
         "dmg": FIRE_DMG,
         "dur": PROJECTILE_DURATION_MS,
     },
     "WATER": {
-        "color": BLUE,
+        "color": WATER_NEON,
         "style": "water",
         "dmg": FIRE_DMG - 1,
         "dur": PROJECTILE_DURATION_MS + 40,
     },
     "WIND": {
-        "color": GREEN,
+        "color": WIND_NEON,
         "style": "wind",
         "dmg": FIRE_DMG - 2,
         "dur": PROJECTILE_DURATION_MS - 40,
     },
     "EARTH": {
-        "color": GREY,
+        "color": EARTH_NEON,
         "style": "earth",
         "dmg": FIRE_DMG + 2,
         "dur": PROJECTILE_DURATION_MS + 80,
     },
     "DARK": {
-        "color": PURPLE,
+        "color": DARK_NEON,
         "style": "dark",
         "dmg": FIRE_DMG,
         "dur": PROJECTILE_DURATION_MS + 20,
     },
     "LIGHTNING": {
-        "color": BLUE,
+        "color": LTNG_NEON,
         "style": "lightning",
         "dmg": LIGHTNING_DMG,
         "dur": max(280, PROJECTILE_DURATION_MS - 120),
@@ -85,16 +95,16 @@ ELEMENT_PRESETS = {
 }
 
 
-# 마법진 색상 매핑 (원소별)
+# Magic Circle Colors - Enhanced Neon Glow
 MAGIC_CIRCLE_COLORS = {
-    "FIRE":      (220,  55,  35),
-    "WATER":     ( 40, 110, 255),
-    "EARTH":     (160,  95,  30),
-    "WIND":      ( 55, 195, 100),
-    "LIGHT":     (235, 235, 245),
-    "DARK":      (140, 145, 165),
-    "LIGHTNING": ( 80, 200, 255),
-    "SHIELD":    ( 80, 210, 255),
+    "FIRE":      (255, 100,  50),  # Bright Fire Orange
+    "WATER":     ( 60, 180, 255),  # Bright Water Blue
+    "EARTH":     (200, 160, 100),  # Golden Earth
+    "WIND":      (120, 255, 180),  # Mint Wind Green
+    "LIGHT":     (240, 255, 255),  # Bright White-Cyan
+    "DARK":      (160,  80, 255),  # Deep Purple
+    "LIGHTNING": (100, 220, 255),  # Electric Blue
+    "SHIELD":    (  0, 240, 255),  # Electric Cyan
 }
 
 # 난이도별 보스 회피 확률
@@ -169,11 +179,14 @@ class SpellGame:
 
         # 오디오 매니저
         self._audio = AudioManager()
+        self._audio.play_bgm()  # 게임 시작 시 BGM 실행 (menu부터 반복)
 
         # 설정 화면 상태
         self._settings_pending: dict = {s: None for s in ALL_SLOTS}
+        self._settings_pending_volumes: dict = {s: 50 for s in ALL_SLOTS}
         self._settings_active_slot: str = "bgm"
         self._settings_clickables: list = []
+        self._settings_scroll_offset: int = 0  # 스크롤 위치
 
         # 이펙트
         self._effects: List[dict] = []
@@ -230,15 +243,20 @@ class SpellGame:
                 if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                     mx, my = event.pos
                     if self._btn_start.collidepoint(mx, my):
+                        self._audio.play_click()
                         self._state = "playing"
                     elif self._btn_exit.collidepoint(mx, my):
+                        self._audio.play_click()
                         return False
                     elif self._btn_guide.collidepoint(mx, my):
+                        self._audio.play_click()
                         self._state = "tutorial"
                         self._tick_tutorial = 0
                     elif self._btn_settings.collidepoint(mx, my):
+                        self._audio.play_click()
                         self._audio.refresh()
                         self._settings_pending = {s: self._audio.get_selected(s) for s in ALL_SLOTS}
+                        self._settings_pending_volumes = {s: self._audio.get_volume(s) for s in ALL_SLOTS}
                         self._settings_active_slot = "bgm"
                         self._state = "settings"
             elif self._state == "settings":
@@ -246,20 +264,42 @@ class SpellGame:
                     mx, my = event.pos
                     for rect, action, value in self._settings_clickables:
                         if rect.collidepoint(mx, my):
+                            if action != "preview":
+                                self._audio.play_click()
                             if action == "back":
                                 self._state = "menu"
+                                self._settings_scroll_offset = 0  # 스크롤 초기화
                             elif action == "save":
                                 for slot in ALL_SLOTS:
                                     self._audio.set_selected(slot, self._settings_pending.get(slot))
+                                    self._audio.set_volume(slot, self._settings_pending_volumes.get(slot, 50))
                                 self._audio.save_config()
                                 self._state = "menu"
+                                self._settings_scroll_offset = 0  # 스크롤 초기화
                             elif action == "slot_tab":
                                 self._settings_active_slot = value
+                                self._settings_scroll_offset = 0  # 탭 변경 시 스크롤 초기화
+                            elif action == "toggle_custom":
+                                self._audio.toggle_custom_mode()
+                                self._settings_scroll_offset = 0  # 모드 변경 시 스크롤 초기화
+                                self._toast(f"{'커스텀' if self._audio.use_custom else '기본'} 사운드 활성화", CYAN)
                             elif action in ALL_SLOTS:
                                 self._settings_pending[action] = value
+                            elif action == "vol_down":
+                                self._settings_pending_volumes[value] = max(
+                                    0, self._settings_pending_volumes.get(value, 50) - 5
+                                )
+                            elif action == "vol_up":
+                                self._settings_pending_volumes[value] = min(
+                                    100, self._settings_pending_volumes.get(value, 50) + 5
+                                )
                             elif action == "preview" and value:
                                 self._audio.preview(value)
                             break
+                # 마우스 휠로 스크롤
+                elif event.type == pygame.MOUSEWHEEL:
+                    self._settings_scroll_offset -= event.y  # y가 양수면 위로, 음수면 아래로
+                    self._settings_scroll_offset = max(0, self._settings_scroll_offset)
             elif self._state == "tutorial":
                 if event.type == pygame.KEYDOWN and event.key in (
                     pygame.K_RETURN, pygame.K_SPACE, pygame.K_ESCAPE, pygame.K_g
@@ -280,6 +320,10 @@ class SpellGame:
                 files=self._audio.files,
                 pending=self._settings_pending,
                 active_slot=self._settings_active_slot,
+                use_custom=self._audio.use_custom,
+                has_custom=len(self._audio.custom_files) > 0,
+                scroll_offset=self._settings_scroll_offset,
+                pending_volumes=self._settings_pending_volumes,
             )
             return True
         if self._state == "tutorial":
@@ -316,14 +360,14 @@ class SpellGame:
             self._state = "game_over"
             self._tick_ending = 0
 
-        # BGM 상태 전환 처리
+        # BGM 볼륨 전환: 보스전 진입 시 20, 퇴장 시 설정값으로 복원
         if _prev_state != "playing" and self._state == "playing":
-            self._audio.play_bgm()
+            self._audio.set_bgm_battle_mode(True)
         elif _prev_state == "playing" and self._state != "playing":
-            self._audio.stop_bgm()
+            self._audio.set_bgm_battle_mode(False)
 
         # 렌더
-        self._render()
+        self._render(dt)
         return True
 
     def apply_spell(self, spell_name: str) -> SpellResult:
@@ -340,6 +384,10 @@ class SpellGame:
             )
             self._spawn_cast_effect(p["color"], p["style"])
             self._spawn_magic_circle("FIRE")
+            # 파티클 효과 추가
+            wand_x, wand_y = int(SCREEN_W * 0.61), int(SCREEN_H * 0.71)
+            self._fp.add_particles(wand_x, wand_y, 15, p["color"], "spark")
+            self._fp.add_camera_shake(3.0, 150)
             self._toast("FIRE!", YELLOW)
             return SpellResult("FIRE", True)
 
@@ -354,6 +402,9 @@ class SpellGame:
             )
             self._spawn_cast_effect(p["color"], p["style"])
             self._spawn_magic_circle("WATER")
+            wand_x, wand_y = int(SCREEN_W * 0.61), int(SCREEN_H * 0.71)
+            self._fp.add_particles(wand_x, wand_y, 12, p["color"], "glow")
+            self._fp.add_camera_shake(2.5, 130)
             self._toast("WATER!", BLUE)
             return SpellResult("WATER", True)
 
@@ -368,6 +419,9 @@ class SpellGame:
             )
             self._spawn_cast_effect(p["color"], p["style"])
             self._spawn_magic_circle("WIND")
+            wand_x, wand_y = int(SCREEN_W * 0.61), int(SCREEN_H * 0.71)
+            self._fp.add_particles(wand_x, wand_y, 20, p["color"], "spark")
+            self._fp.add_camera_shake(2.0, 120)
             self._toast("WIND!", GREEN)
             return SpellResult("WIND", True)
 
@@ -382,6 +436,9 @@ class SpellGame:
             )
             self._spawn_cast_effect(p["color"], p["style"])
             self._spawn_magic_circle("EARTH")
+            wand_x, wand_y = int(SCREEN_W * 0.61), int(SCREEN_H * 0.71)
+            self._fp.add_particles(wand_x, wand_y, 10, p["color"], "spark")
+            self._fp.add_camera_shake(4.0, 180)
             self._toast("EARTH!", GREY)
             return SpellResult("EARTH", True)
 
@@ -396,6 +453,9 @@ class SpellGame:
             )
             self._spawn_cast_effect(p["color"], p["style"])
             self._spawn_magic_circle("DARK")
+            wand_x, wand_y = int(SCREEN_W * 0.61), int(SCREEN_H * 0.71)
+            self._fp.add_particles(wand_x, wand_y, 18, p["color"], "glow")
+            self._fp.add_camera_shake(3.5, 160)
             self._toast("DARK!", PURPLE)
             return SpellResult("DARK", True)
 
@@ -404,6 +464,9 @@ class SpellGame:
             self._spawn_shield_ring()
             self._spawn_cast_effect(CYAN, "light")
             self._spawn_magic_circle("LIGHT")
+            wand_x, wand_y = int(SCREEN_W * 0.61), int(SCREEN_H * 0.71)
+            self._fp.add_particles(wand_x, wand_y, 25, CYAN, "glow")
+            self._fp.add_camera_shake(2.0, 140)
             self._toast(f"SHIELD ({SHIELD_DURATION_MS // 1000}s)", CYAN)
             return SpellResult("SHIELD", True)
 
@@ -420,6 +483,9 @@ class SpellGame:
                 )
                 self._spawn_cast_effect(p["color"], p["style"])
                 self._spawn_magic_circle("LIGHTNING")
+                wand_x, wand_y = int(SCREEN_W * 0.61), int(SCREEN_H * 0.71)
+                self._fp.add_particles(wand_x, wand_y, 30, p["color"], "spark")
+                self._fp.add_camera_shake(5.0, 200)
                 self._toast("LIGHTNING!", BLUE)
                 return SpellResult("LIGHTNING", True)
             self._toast("LIGHTNING (cooldown)", GREY)
@@ -509,7 +575,7 @@ class SpellGame:
 
     # ── 렌더링 ──────────────────────────────────────────────────────────────
 
-    def _render(self) -> None:
+    def _render(self, dt_ms: int = 16) -> None:
         player_offset_x = (self._player_fx - SCREEN_W / 2) / (SCREEN_W / 2)
         self._fp.render_frame(
             player_hp=self.player_hp,
@@ -522,6 +588,7 @@ class SpellGame:
             effects=self._effects,
             difficulty=self.difficulty,
             player_offset_x=player_offset_x,
+            dt_ms=dt_ms,
         )
 
     # 메뉴 렌더
@@ -575,6 +642,7 @@ class SpellGame:
         })
 
     def _spawn_boss_projectile(self, dmg: int) -> None:
+        self._audio.play_boss_attack()
         self._effects.append({
             "type": "proj",
             "element": "BOSS",

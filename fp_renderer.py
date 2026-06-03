@@ -12,44 +12,62 @@ Draws:
 from __future__ import annotations
 
 import math
+import random
 from typing import List, Optional, Tuple
 
 import pygame
 
-# ── Colour palette ─────────────────────────────────────────────────────────────
+# ── Modern Neon/Cyberpunk Colour Palette (2026 Gaming Trend) ──────────────────
+# Inspired by Valorant, Apex Legends, Genshin Impact
 BLACK    = (0,   0,   0)
 WHITE    = (255, 255, 255)
-BG_TOP   = (10,   6,  20)
-BG_MID   = (16,  10,  30)
-BG_BOT   = (8,    5,  16)
-FLOOR_C  = (22,  14,  36)
-RUNE_DIM = (40,  28,  80)
-RUNE_GLO = (100, 70, 200)
-RED      = (220, 66,  66)
-GREEN    = (66, 200, 120)
-YELLOW   = (250, 210,  50)
-BLUE     = (70,  130, 250)
-CYAN     = (80,  210, 255)
-GREY     = (120, 130, 150)
-ORANGE   = (255, 160,  60)
-PURPLE   = (160, 100, 255)
-GOLD     = (255, 200,  40)
+
+# Background - Deep dark with subtle purple tint
+BG_TOP   = (8,   4,  18)
+BG_MID   = (12,  6,  24)
+BG_BOT   = (6,   3,  14)
+FLOOR_C  = (18,  10,  32)
+
+# Runes - Vibrant neon purple/magenta
+RUNE_DIM = (60,  30,  100)
+RUNE_GLO = (180, 80,  255)
+
+# UI Colors - Bright, saturated, neon-inspired
+RED      = (255, 70,  100)   # Neon Pink-Red
+GREEN    = (80,  255, 150)   # Neon Mint Green  
+YELLOW   = (255, 230, 60)    # Electric Yellow
+BLUE     = (80,  150, 255)   # Bright Sky Blue
+CYAN     = (0,   240, 255)   # Electric Cyan
+GREY     = (140, 145, 160)   # Cool Grey
+ORANGE   = (255, 140, 40)    # Vibrant Orange
+PURPLE   = (180, 100, 255)   # Neon Purple
+GOLD     = (255, 215, 50)    # Bright Gold
+PINK     = (255, 100, 200)   # Hot Pink
+BROWN    = (180, 130, 80)    # Warm Earth
+
+# Element Colors - Enhanced vibrancy
+FIRE_NEON     = (255, 100, 50)   # Bright Fire Orange
+WATER_NEON    = (60,  180, 255)  # Bright Water Blue
+WIND_NEON     = (120, 255, 180)  # Mint Wind Green
+EARTH_NEON    = (200, 160, 100)  # Golden Earth
+DARK_NEON     = (160, 80,  255)  # Deep Purple
+LIGHT_NEON    = (240, 255, 255)  # Bright White-Cyan
+LTNG_NEON     = (100, 220, 255)  # Electric Blue
 
 PLAYER_MAX_HP = 100
 BOSS_MAX_HP   = 100
-BROWN         = (150, 110, 60)
 
 # ── Audio-settings slot definitions ────────────────────────────────────────────
 _SLOT_ORDER  = ("bgm", "FIRE", "WATER", "WIND", "EARTH", "DARK", "LIGHTNING", "SHIELD")
 _SLOT_COLORS = {
     "bgm":       GOLD,
-    "FIRE":      ORANGE,
-    "WATER":     BLUE,
-    "WIND":      GREEN,
-    "EARTH":     BROWN,
-    "DARK":      PURPLE,
-    "LIGHTNING": CYAN,
-    "SHIELD":    (80, 200, 220),
+    "FIRE":      FIRE_NEON,
+    "WATER":     WATER_NEON,
+    "WIND":      WIND_NEON,
+    "EARTH":     EARTH_NEON,
+    "DARK":      DARK_NEON,
+    "LIGHTNING": LTNG_NEON,
+    "SHIELD":    LIGHT_NEON,
 }
 _SLOT_LABELS = {
     "bgm": "BGM",  "FIRE": "FIRE",   "WATER": "WATER", "WIND": "WIND",
@@ -71,10 +89,101 @@ class FPRenderer:
         self.font_big = font_big
         self.W, self.H = screen.get_size()
         self._tick: int = 0
-        self.font_kor       = FPRenderer._make_kor_font(22)
-        self.font_kor_big   = FPRenderer._make_kor_font(28)
+        # 개선된 한글 폰트 (더 크고 선명하게)
+        self.font_kor       = FPRenderer._make_kor_font(20)
+        self.font_kor_big   = FPRenderer._make_kor_font(26)
+        self.font_kor_small = FPRenderer._make_kor_font(18)
         self.font_game_title = FPRenderer._make_game_font(58)
         self.font_game_tab   = FPRenderer._make_game_font(20)
+        # 설정 화면 스크롤 위치
+        self._settings_scroll_offset: int = 0
+        # 파티클 시스템
+        self._particles: List[dict] = []
+        # 카메라 쉐이크
+        self._camera_shake_intensity: float = 0.0
+        self._camera_shake_duration: int = 0
+
+    # ── Particle System ────────────────────────────────────────────────────────
+
+    def add_particles(
+        self,
+        x: int, y: int,
+        count: int,
+        color: Tuple[int, int, int],
+        style: str = "spark",
+    ) -> None:
+        """파티클 생성 - 마법 시전 시 현실감 향상"""
+        for _ in range(count):
+            angle = random.uniform(0, math.pi * 2)
+            speed = random.uniform(2, 8)
+            self._particles.append({
+                "x": float(x),
+                "y": float(y),
+                "vx": math.cos(angle) * speed,
+                "vy": math.sin(angle) * speed - random.uniform(1, 3),  # 위로 편향
+                "color": color,
+                "life": random.randint(20, 60),
+                "max_life": 60,
+                "size": random.randint(2, 5),
+                "style": style,
+                "gravity": random.uniform(0.1, 0.3),
+            })
+
+    def update_particles(self, dt_ms: int) -> None:
+        """파티클 업데이트 - 물리 기반 움직임"""
+        alive = []
+        for p in self._particles:
+            p["life"] -= 1
+            if p["life"] <= 0:
+                continue
+            
+            # 물리 시뮬레이션
+            p["vy"] += p["gravity"]  # 중력
+            p["x"] += p["vx"]
+            p["y"] += p["vy"]
+            p["vx"] *= 0.98  # 공기 저항
+            p["vy"] *= 0.98
+            
+            alive.append(p)
+        self._particles = alive
+
+    def render_particles(self) -> None:
+        """파티클 렌더링"""
+        for p in self._particles:
+            fade = p["life"] / p["max_life"]
+            color = tuple(int(c * fade) for c in p["color"])
+            size = max(1, int(p["size"] * fade))
+            
+            if p["style"] == "spark":
+                pygame.draw.circle(self.screen, color, (int(p["x"]), int(p["y"])), size)
+                # 꼬리 효과
+                tail_x = int(p["x"] - p["vx"] * 2)
+                tail_y = int(p["y"] - p["vy"] * 2)
+                pygame.draw.line(self.screen, color, (int(p["x"]), int(p["y"])), (tail_x, tail_y), 1)
+            elif p["style"] == "glow":
+                self._draw_glow(int(p["x"]), int(p["y"]), size + 4, color, layers=3)
+                pygame.draw.circle(self.screen, color, (int(p["x"]), int(p["y"])), size)
+            else:
+                pygame.draw.circle(self.screen, color, (int(p["x"]), int(p["y"])), size)
+
+    def add_camera_shake(self, intensity: float, duration_ms: int) -> None:
+        """카메라 쉐이크 효과 추가"""
+        self._camera_shake_intensity = max(self._camera_shake_intensity, intensity)
+        self._camera_shake_duration = max(self._camera_shake_duration, duration_ms)
+
+    def update_camera_shake(self, dt_ms: int) -> Tuple[int, int]:
+        """카메라 쉐이크 업데이트 및 오프셋 반환"""
+        if self._camera_shake_duration > 0:
+            self._camera_shake_duration -= dt_ms
+            if self._camera_shake_duration <= 0:
+                self._camera_shake_intensity = 0.0
+                return (0, 0)
+            
+            # 랜덤 오프셋 생성
+            shake_x = int(random.uniform(-self._camera_shake_intensity, self._camera_shake_intensity))
+            shake_y = int(random.uniform(-self._camera_shake_intensity, self._camera_shake_intensity))
+            return (shake_x, shake_y)
+        return (0, 0)
 
     # ── Public API ─────────────────────────────────────────────────────────────
 
@@ -105,11 +214,9 @@ class FPRenderer:
         ty     = H // 4 - 10
 
         for dx, dy, alpha in ((4, 4, 35), (2, 2, 80)):
-            sh_s = pygame.Surface(tf.size("AIR SPELL ARENA"), pygame.SRCALPHA)
             sh_t = tf.render("AIR SPELL ARENA", True, (0, 0, 0))
             sh_t.set_alpha(alpha)
-            r = sh_t.get_rect(center=(W // 2 + dx, ty + dy))
-            self.screen.blit(sh_t, r)
+            self.screen.blit(sh_t, sh_t.get_rect(center=(W // 2 + dx, ty + dy)))
 
         title_s = tf.render("AIR SPELL ARENA", True, glow_c)
         self.screen.blit(title_s, title_s.get_rect(center=(W // 2, ty)))
@@ -117,7 +224,7 @@ class FPRenderer:
         # ── Subtitle ────────────────────────────────────────────────────────
         sub_c = self._pulse_color((80, 70, 110), (160, 140, 200), self._tick, 120)
         sub_f = self.font_game_tab
-        sub_s = sub_f.render("✦  Battle the Arcane Boss with Hand Spells  ✦", True, sub_c)
+        sub_s = sub_f.render("*  Battle the Arcane Boss with Hand Spells  *", True, sub_c)
         self.screen.blit(sub_s, sub_s.get_rect(center=(W // 2, ty + 56)))
 
         self._draw_rune_separator(ty + 80)
@@ -199,6 +306,10 @@ class FPRenderer:
         files: List[str],
         pending: dict,
         active_slot: str,
+        use_custom: bool = False,
+        has_custom: bool = False,
+        scroll_offset: int = 0,
+        pending_volumes: Optional[dict] = None,
     ) -> List[Tuple[pygame.Rect, str, Optional[str]]]:
         """탭 기반 오디오 설정 화면. pending={slot: file|None}, active_slot=현재 탭.
 
@@ -206,6 +317,7 @@ class FPRenderer:
           action: "slot_tab"   → value=slot 이름 (탭 버튼)
                   slot_name    → value=파일명|None (파일 행 선택, action==active_slot)
                   "preview"    → value=파일명
+                  "toggle_custom" → None (커스텀 사운드 토글)
                   "save"|"back"
         """
         self._tick += 1
@@ -226,6 +338,24 @@ class FPRenderer:
         self.screen.blit(ts_sh, ts_sh.get_rect(center=(W // 2 + 3, 42 + 3)))
         self.screen.blit(ts,    ts.get_rect(center=(W // 2, 42)))
         pygame.draw.line(self.screen, RUNE_DIM, (W // 8, 72), (W * 7 // 8, 72), 1)
+
+        # ── 커스텀 사운드 토글 버튼 (오른쪽 상단) ─────────────────────────
+        if has_custom:
+            toggle_w, toggle_h = 180, 28
+            toggle_x = W - 50 - toggle_w
+            toggle_y = 38
+            toggle_rect = pygame.Rect(toggle_x, toggle_y, toggle_w, toggle_h)
+            
+            toggle_col = PINK if use_custom else CYAN
+            toggle_bg = pygame.Surface((toggle_w, toggle_h), pygame.SRCALPHA)
+            toggle_bg.fill((toggle_col[0] // 5, toggle_col[1] // 5, toggle_col[2] // 5, 200))
+            self.screen.blit(toggle_bg, toggle_rect.topleft)
+            pygame.draw.rect(self.screen, toggle_col, toggle_rect, 2, border_radius=14)
+            
+            toggle_txt = "🎵 CUSTOM" if use_custom else "🎵 DEFAULT"
+            toggle_s = self.font_game_tab.render(toggle_txt, True, toggle_col)
+            self.screen.blit(toggle_s, toggle_s.get_rect(center=toggle_rect.center))
+            clickables.append((toggle_rect, "toggle_custom", None))
 
         # ── 슬롯 탭 (2줄 × 4 = 8개) ──────────────────────────────────────
         mx, my = 40, 40    # margin
@@ -265,8 +395,8 @@ class FPRenderer:
         # ── 파일 목록 패널 ────────────────────────────────────────────────
         slot_col = _SLOT_COLORS.get(active_slot, GREY)
         panel_x, panel_y = mx, 158
-        panel_w, panel_h = W - mx * 2, H - 158 - 56
-        row_h = 42
+        panel_w, panel_h = W - mx * 2, H - 158 - 70  # 하단 여유 공간 증가
+        row_h = 38  # 행 높이 약간 감소
 
         panel_bg = pygame.Surface((panel_w, panel_h), pygame.SRCALPHA)
         panel_bg.fill((14, 9, 28, 220))
@@ -277,6 +407,30 @@ class FPRenderer:
         hdr_txt = _SLOT_LABELS.get(active_slot, active_slot)
         hdr_s   = self.font_game_tab.render(hdr_txt, True, slot_col)
         self.screen.blit(hdr_s, (panel_x + 16, panel_y + 8))
+
+        # ── Volume control (right side of header) ─────────────────────────
+        vol = (pending_volumes or {}).get(active_slot, 50)
+        vol_dim: Tuple[int, int, int] = (max(0, slot_col[0] // 2), max(0, slot_col[1] // 2), max(0, slot_col[2] // 2))
+        vol_lbl_s = self.font_game_tab.render("VOL", True, vol_dim)
+        self.screen.blit(vol_lbl_s, (panel_x + panel_w - 128, panel_y + 8))
+
+        btn_vminus = pygame.Rect(panel_x + panel_w - 94, panel_y + 6, 22, 22)
+        pygame.draw.rect(self.screen, (42, 32, 62), btn_vminus, border_radius=4)
+        pygame.draw.rect(self.screen, slot_col, btn_vminus, 1, border_radius=4)
+        vm_s = self.font_game_tab.render("-", True, slot_col)
+        self.screen.blit(vm_s, vm_s.get_rect(center=btn_vminus.center))
+        clickables.append((btn_vminus, "vol_down", active_slot))
+
+        vol_num_s = self.font_game_tab.render(str(vol), True, WHITE)
+        self.screen.blit(vol_num_s, vol_num_s.get_rect(center=(panel_x + panel_w - 59, panel_y + 17)))
+
+        btn_vplus = pygame.Rect(panel_x + panel_w - 32, panel_y + 6, 22, 22)
+        pygame.draw.rect(self.screen, (42, 32, 62), btn_vplus, border_radius=4)
+        pygame.draw.rect(self.screen, slot_col, btn_vplus, 1, border_radius=4)
+        vp_s = self.font_game_tab.render("+", True, slot_col)
+        self.screen.blit(vp_s, vp_s.get_rect(center=btn_vplus.center))
+        clickables.append((btn_vplus, "vol_up", active_slot))
+
         pygame.draw.line(self.screen, slot_col,
                          (panel_x + 8, panel_y + 34), (panel_x + panel_w - 8, panel_y + 34), 1)
 
@@ -284,20 +438,46 @@ class FPRenderer:
         list_h   = panel_h - 42
         all_opts: List[Optional[str]] = [None] + files
         sel      = pending.get(active_slot)
-        max_rows = list_h // row_h
-
-        for i, opt in enumerate(all_opts):
-            if i >= max_rows:
-                # 파일이 더 있음을 표시
-                more_s = self.font_kor.render(f"... +{len(all_opts) - max_rows} more", True, (70, 60, 90))
-                self.screen.blit(more_s, (panel_x + 16, list_y0 + max_rows * row_h - 14))
-                break
-
-            ry = list_y0 + i * row_h
-            disp = "(없음)" if opt is None else (opt if len(opt) <= 46 else opt[:43] + "…")
+        max_visible_rows = list_h // row_h
+        total_rows = len(all_opts)
+        
+        # 스크롤 가능한 최대 오프셋
+        max_scroll = max(0, total_rows - max_visible_rows)
+        scroll_offset = max(0, min(scroll_offset, max_scroll))
+        
+        # 스크롤바 표시 (파일이 많을 때)
+        if total_rows > max_visible_rows:
+            scrollbar_x = panel_x + panel_w - 12
+            scrollbar_y = list_y0
+            scrollbar_h = list_h
+            scrollbar_w = 8
+            
+            # 스크롤바 배경
+            pygame.draw.rect(self.screen, (30, 25, 40), 
+                           (scrollbar_x, scrollbar_y, scrollbar_w, scrollbar_h), border_radius=4)
+            
+            # 스크롤바 핸들
+            handle_h = max(20, int(scrollbar_h * (max_visible_rows / total_rows)))
+            handle_y = scrollbar_y + int((scrollbar_h - handle_h) * (scroll_offset / max_scroll)) if max_scroll > 0 else scrollbar_y
+            pygame.draw.rect(self.screen, slot_col,
+                           (scrollbar_x, handle_y, scrollbar_w, handle_h), border_radius=4)
+        
+        # 파일 목록 렌더링 (스크롤 오프셋 적용)
+        for i in range(scroll_offset, min(scroll_offset + max_visible_rows, total_rows)):
+            opt = all_opts[i]
+            display_idx = i - scroll_offset
+            ry = list_y0 + display_idx * row_h
+            
+            # 파일명 길이 제한 (더 짧게)
+            if opt is None:
+                disp = "없음"
+            else:
+                max_len = 35  # 최대 문자 길이 감소
+                disp = opt if len(opt) <= max_len else opt[:max_len-2] + "…"
+            
             is_sel = (opt == sel)
 
-            row_rect = pygame.Rect(panel_x + 8, ry + 2, panel_w - 74, row_h - 4)
+            row_rect = pygame.Rect(panel_x + 8, ry + 2, panel_w - 90, row_h - 4)  # 스크롤바 공간 확보
             clickables.append((row_rect, active_slot, opt))
 
             if is_sel:
@@ -307,34 +487,48 @@ class FPRenderer:
                 self.screen.blit(hl, row_rect.topleft)
                 pygame.draw.rect(self.screen, slot_col, row_rect, 1, border_radius=4)
 
-            radio_x, radio_y = panel_x + 24, ry + row_h // 2
-            pygame.draw.circle(self.screen, GREY, (radio_x, radio_y), 7, 2)
+            radio_x, radio_y = panel_x + 20, ry + row_h // 2
+            pygame.draw.circle(self.screen, GREY, (radio_x, radio_y), 6, 2)
             if is_sel:
-                pygame.draw.circle(self.screen, slot_col, (radio_x, radio_y), 4)
+                pygame.draw.circle(self.screen, slot_col, (radio_x, radio_y), 3)
 
             fn_col = slot_col if is_sel else GREY
-            fn_s = self.font_kor.render(disp, True, fn_col)
-            self.screen.blit(fn_s, (panel_x + 40, ry + row_h // 2 - 9))
+            fn_s = self.font_kor_small.render(disp, True, fn_col)  # 작은 폰트 사용
+            self.screen.blit(fn_s, (panel_x + 36, ry + row_h // 2 - 8))
 
             if opt is not None:
-                pb = pygame.Rect(panel_x + panel_w - 68, ry + row_h // 2 - 13, 60, 26)
+                pb = pygame.Rect(panel_x + panel_w - 84, ry + row_h // 2 - 11, 68, 22)
                 pygame.draw.rect(self.screen, (30, 25, 60), pb, border_radius=5)
                 pygame.draw.rect(self.screen, RUNE_GLO, pb, 1, border_radius=5)
-                pb_s = self.font_kor.render("▶ 듣기", True, GREEN)
+                pb_s = self.font_kor_small.render("▶ 듣기", True, GREEN)
                 self.screen.blit(pb_s, pb_s.get_rect(center=pb.center))
                 clickables.append((pb, "preview", opt))
 
         if not files:
-            no_s = self.font_kor.render("sounds/ 폴더에 오디오 파일 없음", True, (70, 60, 90))
+            no_s = self.font_kor_small.render("sounds/ 폴더에 오디오 파일 없음", True, (70, 60, 90))
             self.screen.blit(no_s, no_s.get_rect(center=(W // 2, list_y0 + 40)))
+        
+        # 스크롤 힌트 표시
+        if total_rows > max_visible_rows:
+            hint_s = self.font_kor_small.render("마우스 휠로 스크롤 가능", True, (100, 90, 120))
+            self.screen.blit(hint_s, (panel_x + panel_w - hint_s.get_width() - 30, panel_y + panel_h - 20))
 
         # ── 저장 / 뒤로 버튼 ─────────────────────────────────────────────
-        btn_save = pygame.Rect(W // 2 - 125, H - 48, 110, 38)
-        btn_back = pygame.Rect(W // 2 + 15,  H - 48, 110, 38)
-        self._draw_button(btn_save, "저  장", GREEN, self.font_kor_big)
-        self._draw_button(btn_back, "뒤  로", GREY,  self.font_kor_big)
+        btn_save = pygame.Rect(W // 2 - 125, H - 42, 110, 34)
+        btn_back = pygame.Rect(W // 2 + 15,  H - 42, 110, 34)
+        self._draw_button(btn_save, "저장", GREEN, self.font_kor_big)
+        self._draw_button(btn_back, "뒤로", GREY,  self.font_kor_big)
         clickables.append((btn_save, "save", None))
         clickables.append((btn_back, "back", None))
+        
+        # 스크롤 제어를 위한 특수 영역 (마우스 휠 감지용)
+        clickables.append((pygame.Rect(panel_x, panel_y, panel_w, panel_h), "scroll_area", None))
+
+        # 커스텀 모드 표시 (하단 상태바)
+        if has_custom:
+            status_txt = f"모드: {'커스텀 사운드' if use_custom else '기본 사운드'}  |  파일: {len(files)}개"
+            status_s = self.font_kor_small.render(status_txt, True, GREY)
+            self.screen.blit(status_s, (50, H - 58))
 
         pygame.display.flip()
         return clickables
@@ -568,10 +762,17 @@ class FPRenderer:
         effects:           List[dict],
         difficulty:        str = "normal",
         player_offset_x:   float = 0.0,
+        dt_ms:             int = 16,
     ) -> None:
         self._tick += 1
+        
+        # 파티클 업데이트
+        self.update_particles(dt_ms)
+        
+        # 카메라 쉐이크 오프셋
+        shake_x, shake_y = self.update_camera_shake(dt_ms)
 
-        # 1. Background (with parallax)
+        # 1. Background (with parallax + shake)
         self._draw_bg(player_offset_x)
 
         # 2. Boss (behind effects)
@@ -579,6 +780,9 @@ class FPRenderer:
 
         # 3. Effects (projectiles)
         self._draw_effects(effects, player_offset_x)
+        
+        # 3.5. 파티클 렌더링 (이펙트 위에)
+        self.render_particles()
 
         # 4. Shield vignette
         if shield_time_left > 0:
