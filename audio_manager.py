@@ -23,11 +23,12 @@ _CONFIG_FILE = "audio_config.json"
 _EXTS = {".wav", ".mp3", ".ogg"}
 CLICK_SFX = "클릭사운드.mp3"  # UI 클릭음 (설정 목록에서 제외)
 BOSS_ATTACK_SFX = "Boss Attack.mp3"  # 보스 공격음 (설정 목록에서 제외)
-_FIXED_SFXS = {CLICK_SFX, BOSS_ATTACK_SFX}  # 파일 선택 목록에서 항상 제외
+INTRO_SOUND = "시작사운드.mp3"  # 게임 시작 인트로 사운드 (설정 목록에서 제외)
+_FIXED_SFXS = {CLICK_SFX, BOSS_ATTACK_SFX, INTRO_SOUND}  # 파일 선택 목록에서 항상 제외
 _DEFAULT_VOLUME: int = 50    # 기본 볼륨 (0-100)
 _BATTLE_BGM_VOLUME: int = 20  # 보스전 중 BGM 덕킹 볼륨
 
-SPELL_SLOTS: tuple = ("FIRE", "WATER", "WIND", "EARTH", "DARK", "LIGHT", "SHIELD")
+SPELL_SLOTS: tuple = ("FIRE", "WATER", "WIND", "EARTH", "DARK", "LIGHT", "LIGHTNING")
 ALL_SLOTS:   tuple = ("bgm",) + SPELL_SLOTS
 
 
@@ -55,6 +56,7 @@ class AudioManager:
         self._preview_snd: Optional[pygame.mixer.Sound] = None
         self._click_snd: Optional[pygame.mixer.Sound] = None
         self._boss_attack_snd: Optional[pygame.mixer.Sound] = None
+        self._intro_snd: Optional[pygame.mixer.Sound] = None
         self._volumes: Dict[str, int] = {s: _DEFAULT_VOLUME for s in ALL_SLOTS}
 
         self.refresh()
@@ -89,6 +91,15 @@ class AudioManager:
                 print(f"[AudioManager] 보스 공격음 로드 실패: {e}")
                 self._boss_attack_snd = None
 
+        intro_path = self._dir / INTRO_SOUND
+        if intro_path.exists():
+            try:
+                self._intro_snd = pygame.mixer.Sound(str(intro_path))
+                self._intro_snd.set_volume(0.9)
+            except Exception as e:
+                print(f"[AudioManager] 인트로 사운드 로드 실패: {e}")
+                self._intro_snd = None
+
         if self._custom_dir.exists():
             self._custom_files = sorted(
                 f.name for f in self._custom_dir.iterdir()
@@ -99,9 +110,15 @@ class AudioManager:
 
         cfg = self._load_config()
         self._use_custom = cfg.get("use_custom", False)
+        if self._use_custom:
+            slot_cfg   = cfg.get("custom", {})
+            active_files = self._custom_files
+        else:
+            slot_cfg   = cfg
+            active_files = self._files
         for slot in ALL_SLOTS:
-            v = cfg.get(slot)
-            self._config[slot] = v if (v and v in self._files) else None
+            v = slot_cfg.get(slot)
+            self._config[slot] = v if (v and v in active_files) else None
 
         saved_vols = cfg.get("volumes", {})
         for slot in ALL_SLOTS:
@@ -120,26 +137,40 @@ class AudioManager:
             return {}
 
     def save_config(self) -> None:
-        config_with_custom = {**self._config, "use_custom": self._use_custom, "volumes": self._volumes}
+        existing = self._load_config()
+        if self._use_custom:
+            existing["custom"] = {slot: self._config[slot] for slot in ALL_SLOTS}
+        else:
+            for slot in ALL_SLOTS:
+                existing[slot] = self._config[slot]
+        existing["use_custom"] = self._use_custom
+        existing["volumes"]    = self._volumes
         Path(_CONFIG_FILE).write_text(
-            json.dumps(config_with_custom, indent=2, ensure_ascii=False),
+            json.dumps(existing, indent=2, ensure_ascii=False),
             encoding="utf-8",
         )
 
     def _mk_sound(self, filename: Optional[str]) -> Optional[pygame.mixer.Sound]:
         if not filename:
             return None
-        # 커스텀 모드일 때는 custom 폴더에서 먼저 찾기
-        if self._use_custom and filename in self._custom_files:
-            path = self._custom_dir / filename
-        else:
-            path = self._dir / filename
-        try:
-            snd = pygame.mixer.Sound(str(path))
-            return snd
-        except Exception as e:
-            print(f"[AudioManager] SFX 로드 실패 ({filename}): {e}")
-            return None
+        # custom 모드: custom 폴더 우선 → 없으면 기본 폴더
+        candidates: list = []
+        if self._use_custom:
+            candidates.append(self._custom_dir / filename)
+        candidates.append(self._dir / filename)
+
+        for path in candidates:
+            if path.exists():
+                try:
+                    snd = pygame.mixer.Sound(str(path))
+                    return snd
+                except Exception as e:
+                    print(f"[AudioManager] SFX 로드 실패 ({path}): {e}")
+                    return None
+
+        tried = " | ".join(str(p) for p in candidates)
+        print(f"[AudioManager] SFX 파일 없음 ({filename}) — 시도: {tried}")
+        return None
 
     # ── 슬롯 API ────────────────────────────────────────────────────────────
 
@@ -160,9 +191,22 @@ class AudioManager:
     def toggle_custom_mode(self) -> None:
         """기본/커스텀 사운드 세트를 전환합니다."""
         self._use_custom = not self._use_custom
+        cfg = self._load_config()
+        if self._use_custom:
+            slot_cfg   = cfg.get("custom", {})
+            active_files = self._custom_files
+        else:
+            slot_cfg   = cfg
+            active_files = self._files
+        for slot in ALL_SLOTS:
+            v = slot_cfg.get(slot)
+            self._config[slot] = v if (v and v in active_files) else None
         # 사운드 재로드
         for spell in SPELL_SLOTS:
             self._sfx_snds[spell] = self._mk_sound(self._config[spell])
+            if self._sfx_snds[spell]:
+                self._sfx_snds[spell].set_volume(self._volumes.get(spell, _DEFAULT_VOLUME) / 100)
+        self.play_bgm()
 
     def get_selected(self, slot: str) -> Optional[str]:
         return self._config.get(slot)
@@ -183,11 +227,12 @@ class AudioManager:
             self.stop_bgm()
             return
         try:
-            # 커스텀 모드일 때는 custom 폴더에서 먼저 찾기
-            if self._use_custom and fn in self._custom_files:
-                path = self._custom_dir / fn
-            else:
-                path = self._dir / fn
+            # custom 모드: custom 폴더 우선 → 없으면 기본 폴더
+            bgm_candidates = []
+            if self._use_custom:
+                bgm_candidates.append(self._custom_dir / fn)
+            bgm_candidates.append(self._dir / fn)
+            path = next((p for p in bgm_candidates if p.exists()), bgm_candidates[-1])
             pygame.mixer.music.load(str(path))
             pygame.mixer.music.set_volume(self._volumes.get("bgm", _DEFAULT_VOLUME) / 100)
             pygame.mixer.music.play(-1)
@@ -256,6 +301,16 @@ class AudioManager:
                 self._boss_attack_snd.play()
             except Exception:
                 pass
+
+    def play_intro_sound(self) -> float:
+        """인트로 사운드를 재생하고 지속 시간을 ms로 반환합니다."""
+        if self._intro_snd:
+            try:
+                self._intro_snd.play()
+                return self._intro_snd.get_length() * 1000.0
+            except Exception:
+                pass
+        return 4000.0  # fallback 4초
 
     def play_sfx(self) -> None:
         """(deprecated) play_spell_sfx 사용 권장."""

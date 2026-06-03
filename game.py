@@ -6,12 +6,12 @@ from typing import Optional, Tuple, List
 import math
 import random
 import pygame
-from audio_manager import AudioManager, ALL_SLOTS
+from audio_manager import AudioManager, ALL_SLOTS, SPELL_SLOTS
 from fp_renderer import FPRenderer
 
 
 # ── 화면/렌더 상수 ─────────────────────────────────────────────────────────────
-SCREEN_W, SCREEN_H = 900, 600
+SCREEN_W, SCREEN_H = 1280, 720
 FPS = 60
 
 # Modern Neon/Cyberpunk Colors (2026 Gaming Trend)
@@ -169,17 +169,33 @@ class SpellGame:
         self.message_color = WHITE
 
         # 상태/메뉴
-        self._state = "menu"  # 'menu' | 'tutorial' | 'playing' | 'game_over' | 'you_win'
+        self._state = "menu"   # 'intro' | 'menu' | 'tutorial' | 'playing' | 'game_over' | 'you_win'
         _cx = SCREEN_W // 2
         _by = SCREEN_H // 2 - 18
-        self._btn_start    = pygame.Rect(_cx - 135, _by,        270, 54)
-        self._btn_exit     = pygame.Rect(_cx - 80,  _by + 68,   160, 42)
-        self._btn_guide    = pygame.Rect(_cx - 135, _by + 124,  130, 38)
-        self._btn_settings = pygame.Rect(_cx + 5,   _by + 124,  130, 38)
+        self._btn_start    = pygame.Rect(_cx - 160, _by,        320, 58)
+        self._btn_exit     = pygame.Rect(_cx - 95,  _by + 76,   190, 46)
+        self._btn_guide    = pygame.Rect(_cx - 175, _by + 142,  160, 42)
+        self._btn_settings = pygame.Rect(_cx + 15,  _by + 142,  160, 42)
+
+        # 인게임 일시정지
+        self._btn_pause = pygame.Rect(SCREEN_W - 68, 10, 58, 28)
+        self._pause_vols: dict = {"bgm": 50, "sfx": 50}
+        self._pause_clickables: list = []
+
+        # 인트로 화면 상태
+        self._INTRO_TEXT: str = "ARE YOU READY TO GAME?"
+        self._intro_tick: int = 0
+        self._intro_start_ms: int = 0
+        self._intro_char_ms: float = 180.0
+        self._intro_chars_shown: int = 0
+        _icx = SCREEN_W // 2
+        _iby = SCREEN_H * 2 // 3
+        self._btn_intro_play = pygame.Rect(_icx - 165, _iby, 150, 52)
+        self._btn_intro_exit = pygame.Rect(_icx + 15,  _iby, 150, 52)
 
         # 오디오 매니저
         self._audio = AudioManager()
-        self._audio.play_bgm()  # 게임 시작 시 BGM 실행 (menu부터 반복)
+        self._audio.play_bgm()  # 메뉴부터 BGM 시작
 
         # 설정 화면 상태
         self._settings_pending: dict = {s: None for s in ALL_SLOTS}
@@ -221,11 +237,28 @@ class SpellGame:
             if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
                 if self._state == "settings":
                     self._state = "menu"
+                elif self._state == "playing":
+                    self._state = "pause"
+                elif self._state == "pause":
+                    self._state = "playing"
                 else:
                     return False
-            if self._state == "menu":
+            if self._state == "intro":
+                if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                    mx, my = event.pos
+                    if self._intro_chars_shown >= len(self._INTRO_TEXT):
+                        if self._btn_intro_play.collidepoint(mx, my):
+                            self._audio.play_click()
+                            self._state = "playing"
+                        elif self._btn_intro_exit.collidepoint(mx, my):
+                            self._audio.play_click()
+                            self._state = "menu"
+                elif event.type == pygame.KEYDOWN and event.key in (pygame.K_RETURN, pygame.K_SPACE):
+                    self._state = "playing"  # SPACE/ENTER로 바로 게임 시작
+            elif self._state == "menu":
                 if event.type == pygame.KEYDOWN and event.key in (pygame.K_RETURN, pygame.K_SPACE):
-                    self._state = "playing"
+                    self._intro_tick = 0; self._intro_chars_shown = 0; self._intro_start_ms = 0
+                    self._state = "intro"
                 if event.type == pygame.KEYDOWN and event.key in (pygame.K_1, pygame.K_2, pygame.K_3, pygame.K_4):
                     if event.key == pygame.K_1:
                         self.set_difficulty("easy")
@@ -244,7 +277,8 @@ class SpellGame:
                     mx, my = event.pos
                     if self._btn_start.collidepoint(mx, my):
                         self._audio.play_click()
-                        self._state = "playing"
+                        self._intro_tick = 0; self._intro_chars_shown = 0; self._intro_start_ms = 0
+                        self._state = "intro"
                     elif self._btn_exit.collidepoint(mx, my):
                         self._audio.play_click()
                         return False
@@ -305,11 +339,62 @@ class SpellGame:
                     pygame.K_RETURN, pygame.K_SPACE, pygame.K_ESCAPE, pygame.K_g
                 ):
                     self._state = "menu"
+            elif self._state == "playing":
+                if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                    if self._btn_pause.collidepoint(event.pos):
+                        self._audio.play_click()
+                        self._state = "pause"
+            elif self._state == "pause":
+                if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                    for rect, action, _ in self._pause_clickables:
+                        if rect.collidepoint(event.pos):
+                            self._audio.play_click()
+                            if action == "resume":
+                                self._state = "playing"
+                            elif action == "vol_bgm_down":
+                                self._pause_vols["bgm"] = max(0, self._pause_vols["bgm"] - 5)
+                                self._audio.set_volume("bgm", self._pause_vols["bgm"])
+                            elif action == "vol_bgm_up":
+                                self._pause_vols["bgm"] = min(100, self._pause_vols["bgm"] + 5)
+                                self._audio.set_volume("bgm", self._pause_vols["bgm"])
+                            elif action == "vol_sfx_down":
+                                self._pause_vols["sfx"] = max(0, self._pause_vols["sfx"] - 5)
+                                for _slot in SPELL_SLOTS:
+                                    self._audio.set_volume(_slot, self._pause_vols["sfx"])
+                            elif action == "vol_sfx_up":
+                                self._pause_vols["sfx"] = min(100, self._pause_vols["sfx"] + 5)
+                                for _slot in SPELL_SLOTS:
+                                    self._audio.set_volume(_slot, self._pause_vols["sfx"])
+                            elif action == "exit_menu":
+                                self._reset_game()
+                            break
             elif self._state in ("game_over", "you_win"):
                 if event.type == pygame.KEYDOWN and event.key in (pygame.K_RETURN, pygame.K_SPACE):
                     self._reset_game()
 
         # 엔딩/메뉴/설정 상태는 게임 로직 없이 렌더만
+        if self._state == "intro":
+            self.clock.tick(FPS)
+            now = pygame.time.get_ticks()
+            if self._intro_tick == 0:
+                self._intro_start_ms = now
+                duration_ms = self._audio.play_intro_sound()
+                self._intro_char_ms = (duration_ms * 0.75) / max(1, len(self._INTRO_TEXT))
+            self._intro_tick += 1
+            elapsed = now - self._intro_start_ms
+            self._intro_chars_shown = min(
+                len(self._INTRO_TEXT),
+                int(elapsed / self._intro_char_ms) if self._intro_char_ms > 0 else 0,
+            )
+            show_btns = self._intro_chars_shown >= len(self._INTRO_TEXT)
+            self._fp.render_intro(
+                self._intro_tick,
+                self._intro_chars_shown,
+                self._btn_intro_play if show_btns else None,
+                self._btn_intro_exit if show_btns else None,
+                self._INTRO_TEXT,
+            )
+            return True
         if self._state == "menu":
             self.clock.tick(FPS)
             self._render_menu()
@@ -330,6 +415,13 @@ class SpellGame:
             self.clock.tick(FPS)
             self._fp.render_tutorial(self._tick_tutorial)
             self._tick_tutorial += 1
+            return True
+        if self._state == "pause":
+            self.clock.tick(FPS)
+            self._pause_clickables = self._fp.render_pause(
+                bgm_vol=self._pause_vols["bgm"],
+                sfx_vol=self._pause_vols["sfx"],
+            )
             return True
         if self._state in ("game_over", "you_win"):
             self.clock.tick(FPS)
@@ -360,11 +452,22 @@ class SpellGame:
             self._state = "game_over"
             self._tick_ending = 0
 
-        # BGM 볼륨 전환: 보스전 진입 시 20, 퇴장 시 설정값으로 복원
-        if _prev_state != "playing" and self._state == "playing":
-            self._audio.set_bgm_battle_mode(True)
-        elif _prev_state == "playing" and self._state != "playing":
-            self._audio.set_bgm_battle_mode(False)
+        # BGM 전환: 상태가 바뀌는 순간만 실행
+        if _prev_state != self._state:
+            if self._state == "pause":
+                self._pause_vols = {
+                    "bgm": self._audio.get_volume("bgm"),
+                    "sfx": self._audio.get_volume(SPELL_SLOTS[0]),
+                }
+            elif self._state == "intro":
+                self._audio.stop_bgm()              # 인트로 중 BGM 없음
+            elif self._state == "menu":
+                self._audio.play_bgm()              # 메뉴: BGM 정상 볼륨
+            elif self._state == "playing":
+                self._audio.play_bgm()              # 게임: BGM 시작 (battle 본류가 앞에 있으면 무시)
+                self._audio.set_bgm_battle_mode(True)
+            elif self._state in ("game_over", "you_win"):
+                self._audio.set_bgm_battle_mode(False)  # 엔딩: 볼륨 복원
 
         # 렌더
         self._render(dt)
@@ -468,7 +571,7 @@ class SpellGame:
             self._fp.add_particles(wand_x, wand_y, 25, CYAN, "glow")
             self._fp.add_camera_shake(2.0, 140)
             self._toast(f"SHIELD ({SHIELD_DURATION_MS // 1000}s)", CYAN)
-            return SpellResult("SHIELD", True)
+            return SpellResult("LIGHT", True)
 
         if label in ("ZIGZAG", "LIGHTNING"):
             if self.lightning_cd_left <= 0:

@@ -58,20 +58,20 @@ PLAYER_MAX_HP = 100
 BOSS_MAX_HP   = 100
 
 # ── Audio-settings slot definitions ────────────────────────────────────────────
-_SLOT_ORDER  = ("bgm", "FIRE", "WATER", "WIND", "EARTH", "DARK", "LIGHTNING", "SHIELD")
+_SLOT_ORDER  = ("bgm", "FIRE", "WATER", "WIND", "EARTH", "DARK", "LIGHT", "SHIELD")
 _SLOT_COLORS = {
-    "bgm":       GOLD,
-    "FIRE":      FIRE_NEON,
-    "WATER":     WATER_NEON,
-    "WIND":      WIND_NEON,
-    "EARTH":     EARTH_NEON,
-    "DARK":      DARK_NEON,
-    "LIGHTNING": LTNG_NEON,
-    "SHIELD":    LIGHT_NEON,
+    "bgm":    GOLD,
+    "FIRE":   FIRE_NEON,
+    "WATER":  WATER_NEON,
+    "WIND":   WIND_NEON,
+    "EARTH":  EARTH_NEON,
+    "DARK":   DARK_NEON,
+    "LIGHT":  LTNG_NEON,
+    "SHIELD": LIGHT_NEON,
 }
 _SLOT_LABELS = {
-    "bgm": "BGM",  "FIRE": "FIRE",   "WATER": "WATER", "WIND": "WIND",
-    "EARTH": "EARTH", "DARK": "DARK", "LIGHTNING": "LTNG", "SHIELD": "SHIELD",
+    "bgm": "BGM",  "FIRE": "FIRE",  "WATER": "WATER", "WIND": "WIND",
+    "EARTH": "EARTH", "DARK": "DARK", "LIGHT": "LIGHT", "SHIELD": "SHIELD",
 }
 
 
@@ -90,18 +90,30 @@ class FPRenderer:
         self.W, self.H = screen.get_size()
         self._tick: int = 0
         # 개선된 한글 폰트 (더 크고 선명하게)
-        self.font_kor       = FPRenderer._make_kor_font(20)
-        self.font_kor_big   = FPRenderer._make_kor_font(26)
-        self.font_kor_small = FPRenderer._make_kor_font(18)
+        self.font_kor       = FPRenderer._make_kor_font(22)
+        self.font_kor_big   = FPRenderer._make_kor_font(28)
+        self.font_kor_small = FPRenderer._make_kor_font(20)
         self.font_game_title = FPRenderer._make_game_font(58)
         self.font_game_tab   = FPRenderer._make_game_font(20)
         # 설정 화면 스크롤 위치
         self._settings_scroll_offset: int = 0
+        # 배경 그라디언트 캐시 (매 프레임 720줄 draw 대신 blit 1회로 최적화)
+        self._bg_cache: Optional[pygame.Surface] = None
         # 파티클 시스템
         self._particles: List[dict] = []
         # 카메라 쉐이크
         self._camera_shake_intensity: float = 0.0
         self._camera_shake_duration: int = 0
+        # 보스 애니메이션 상태 추적
+        self._boss_prev_hp_ratio: float = 1.0
+        self._boss_hit_tick: int = -999  # 마지막으로 피격된 tick
+        # SRCALPHA 오버레이 캐시 (매 프레임 재할당 방지)
+        self._pause_ov: Optional[pygame.Surface] = None
+        self._end_ov: Optional[pygame.Surface] = None
+        self._boss_sh_r: int = -1
+        self._boss_sh_surf: Optional[pygame.Surface] = None
+        self._boss_hl_r: int = -1
+        self._boss_hl_surf: Optional[pygame.Surface] = None
 
     # ── Particle System ────────────────────────────────────────────────────────
 
@@ -187,6 +199,68 @@ class FPRenderer:
 
     # ── Public API ─────────────────────────────────────────────────────────────
 
+    def render_intro(
+        self,
+        tick: int,
+        chars_shown: int,
+        btn_play: Optional[pygame.Rect],
+        btn_exit: Optional[pygame.Rect],
+        text: str = "ARE YOU READY TO GAME?",
+    ) -> None:
+        """드라마틱 인트로: 한 글자씩 나타나는 제목 + PLAY / EXIT 버튼."""
+        W, H = self.W, self.H
+
+        self.screen.fill((0, 0, 0))
+
+        # 은은한 배경 파티클
+        for k in range(5):
+            a  = tick * 0.007 + k * math.pi * 2 / 5
+            px = int(W // 2 + math.cos(a) * (180 + k * 30))
+            py = int(H // 2 + math.sin(a * 0.6) * (55 + k * 18))
+            rc = self._pulse_color((10, 10, 50), (40, 30, 100), tick + k * 20, 100)
+            pygame.draw.circle(self.screen, rc, (px, py), 1 + k % 2)
+
+        # 수평 스캔라인 (극적 효과)
+        sl = pygame.Surface((W, 1), pygame.SRCALPHA)
+        sl.fill((0, 0, 0, 38))
+        for y in range(0, H, 5):
+            self.screen.blit(sl, (0, y))
+
+        # ── 한 글자씩 나타나기 ─────────────────────────────────────────────
+        tf          = self.font_game_title
+        char_widths = [tf.size(c)[0] for c in text]
+        total_w     = sum(char_widths)
+        start_x     = W // 2 - total_w // 2
+        ty          = H // 2 - 52
+
+        x = start_x
+        for i, (c, cw) in enumerate(zip(text, char_widths)):
+            if i < chars_shown and c != ' ':
+                age       = chars_shown - i
+                glow_frac = max(0.0, 1.0 - age * 0.06)
+
+                sh = tf.render(c, True, (0, 0, 30))
+                sh.set_alpha(150)
+                self.screen.blit(sh, (x + 3, ty + 3))
+
+                col = self._pulse_color((140, 210, 255), (240, 255, 255), tick + i * 11, 65)
+                self.screen.blit(tf.render(c, True, col), (x, ty))
+
+                if glow_frac > 0.04:
+                    gc = (int(60 * glow_frac), int(160 * glow_frac), int(255 * glow_frac))
+                    gs = tf.render(c, True, gc)
+                    gs.set_alpha(int(200 * glow_frac))
+                    self.screen.blit(gs, (x - 1, ty - 1))
+            x += cw
+
+        # ── PLAY / EXIT 버튼 (전체 공개 후 표시) ──────────────────────────
+        if btn_play is not None:
+            self._draw_hero_button(btn_play, "PLAY", CYAN)
+        if btn_exit is not None:
+            self._draw_button(btn_exit, "EXIT", RED)
+
+        pygame.display.flip()
+
     def render_menu(
         self,
         btn_start:    pygame.Rect,
@@ -254,12 +328,13 @@ class FPRenderer:
 
         # ── Keyboard shortcut key-caps ──────────────────────────────────────
         keys = [("1", "Easy", GREEN), ("2", "Normal", YELLOW),
-                ("3", "Hard", ORANGE), ("4", "Impossible", RED), ("G", "Guide", GOLD)]
-        total_w = len(keys) * 88
+                ("3", "Hard", ORANGE), ("4", "Impossl", RED), ("G", "Guide", GOLD)]
+        _kslot = 110
+        total_w = len(keys) * _kslot
         kx0 = W // 2 - total_w // 2
-        ky  = H * 3 // 4 + 36
+        ky  = H * 3 // 4 + 42
         for i, (k_lbl, k_name, k_col) in enumerate(keys):
-            kx = kx0 + i * 88
+            kx = kx0 + i * _kslot
             # key cap box
             cap = pygame.Rect(kx, ky - 11, 22, 22)
             cap_bg = pygame.Surface((22, 22), pygame.SRCALPHA)
@@ -806,12 +881,13 @@ class FPRenderer:
         W, H = self.W, self.H
         # Dim background
         self._draw_bg(0.0)
-        overlay = pygame.Surface((W, H), pygame.SRCALPHA)
+        if self._end_ov is None:
+            self._end_ov = pygame.Surface((W, H), pygame.SRCALPHA)
         if state == "game_over":
-            overlay.fill((80, 0, 0, 170))
+            self._end_ov.fill((80, 0, 0, 170))
         else:
-            overlay.fill((20, 10, 50, 150))
-        self.screen.blit(overlay, (0, 0))
+            self._end_ov.fill((20, 10, 50, 150))
+        self.screen.blit(self._end_ov, (0, 0))
 
         if state == "game_over":
             title_col = self._pulse_color((200, 40, 40), (255, 80, 80), tick, 50)
@@ -847,23 +923,99 @@ class FPRenderer:
 
         pygame.display.flip()
 
+    def render_pause(
+        self,
+        bgm_vol: int,
+        sfx_vol: int,
+    ) -> List[Tuple[pygame.Rect, str, Optional[str]]]:
+        """인게임 일시정지 오버레이. 반환: clickables [(rect, action, value)]."""
+        self._tick += 1
+        W, H = self.W, self.H
+        clickables: List[Tuple[pygame.Rect, str, Optional[str]]] = []
+
+        self._draw_bg(0.0)
+
+        if self._pause_ov is None:
+            self._pause_ov = pygame.Surface((W, H), pygame.SRCALPHA)
+            self._pause_ov.fill((0, 0, 18, 215))
+        self.screen.blit(self._pause_ov, (0, 0))
+
+        # 패널
+        pw, ph = 460, 360
+        px, py = W // 2 - pw // 2, H // 2 - ph // 2
+        if not hasattr(self, "_pause_panel"):
+            self._pause_panel: pygame.Surface = pygame.Surface((pw, ph), pygame.SRCALPHA)
+            self._pause_panel.fill((8, 4, 28, 245))
+        self.screen.blit(self._pause_panel, (px, py))
+        border_c = self._pulse_color(CYAN, WHITE, self._tick, 60)
+        pygame.draw.rect(self.screen, border_c, (px, py, pw, ph), 2, border_radius=14)
+
+        # 제목
+        tc = self._pulse_color((80, 220, 255), WHITE, self._tick, 50)
+        ts = self.font_game_title.render("PAUSED", True, tc)
+        self.screen.blit(ts, ts.get_rect(center=(W // 2, py + 44)))
+        pygame.draw.line(self.screen, RUNE_DIM, (px + 20, py + 74), (px + pw - 20, py + 74), 1)
+
+        # RESUME 버튼
+        btn_resume = pygame.Rect(W // 2 - 120, py + 84, 240, 50)
+        self._draw_hero_button(btn_resume, "RESUME", GREEN)
+        clickables.append((btn_resume, "resume", None))
+
+        # 볼륨 컨트롤 (BGM / SFX 2행)
+        vol_rows = [
+            ("BGM  VOL", bgm_vol, GOLD,   "vol_bgm_down", "vol_bgm_up"),
+            ("SFX  VOL", sfx_vol, PURPLE, "vol_sfx_down", "vol_sfx_up"),
+        ]
+        for row_i, (label, vol, col, act_m, act_p) in enumerate(vol_rows):
+            ry = py + 156 + row_i * 54
+
+            lbl_s = self.font_game_tab.render(label, True, col)
+            self.screen.blit(lbl_s, lbl_s.get_rect(midleft=(px + 36, ry + 15)))
+
+            btn_m = pygame.Rect(px + pw - 142, ry + 4, 30, 26)
+            pygame.draw.rect(self.screen, (40, 30, 60), btn_m, border_radius=5)
+            pygame.draw.rect(self.screen, col, btn_m, 1, border_radius=5)
+            ms = self.font_game_tab.render("-", True, col)
+            self.screen.blit(ms, ms.get_rect(center=btn_m.center))
+            clickables.append((btn_m, act_m, None))
+
+            num_s = self.font_game_tab.render(str(vol), True, WHITE)
+            self.screen.blit(num_s, num_s.get_rect(center=(px + pw - 92, ry + 17)))
+
+            btn_p = pygame.Rect(px + pw - 56, ry + 4, 30, 26)
+            pygame.draw.rect(self.screen, (40, 30, 60), btn_p, border_radius=5)
+            pygame.draw.rect(self.screen, col, btn_p, 1, border_radius=5)
+            ps = self.font_game_tab.render("+", True, col)
+            self.screen.blit(ps, ps.get_rect(center=btn_p.center))
+            clickables.append((btn_p, act_p, None))
+
+        # 구분선
+        pygame.draw.line(self.screen, RUNE_DIM, (px + 20, py + 276), (px + pw - 20, py + 276), 1)
+
+        # EXIT TO MENU 버튼
+        btn_exit = pygame.Rect(W // 2 - 120, py + 290, 240, 48)
+        self._draw_button(btn_exit, "EXIT  TO  MENU", RED)
+        clickables.append((btn_exit, "exit_menu", None))
+
+        pygame.display.flip()
+        return clickables
+
     # ── Background ─────────────────────────────────────────────────────────────
 
     def _draw_bg(self, player_offset_x: float = 0.0) -> None:
         W, H = self.W, self.H
         horizon = H // 2
 
-        # Ceiling gradient
-        for y in range(horizon):
-            t = y / max(horizon, 1)
-            c = self._lerp_color(BG_TOP, BG_MID, t)
-            pygame.draw.line(self.screen, c, (0, y), (W, y))
-
-        # Floor gradient
-        for y in range(horizon, H):
-            t = (y - horizon) / max(H - horizon, 1)
-            c = self._lerp_color(FLOOR_C, BG_BOT, t)
-            pygame.draw.line(self.screen, c, (0, y), (W, y))
+        # 그라디언트는 정적 → 최초 1회만 생성 후 blit으로 재사용 (60fps × 720줄 → 1 blit)
+        if self._bg_cache is None:
+            self._bg_cache = pygame.Surface((W, H))
+            for y in range(horizon):
+                t = y / max(horizon, 1)
+                pygame.draw.line(self._bg_cache, self._lerp_color(BG_TOP, BG_MID, t), (0, y), (W, y))
+            for y in range(horizon, H):
+                t = (y - horizon) / max(H - horizon, 1)
+                pygame.draw.line(self._bg_cache, self._lerp_color(FLOOR_C, BG_BOT, t), (0, y), (W, y))
+        self.screen.blit(self._bg_cache, (0, 0))
 
         # Horizon accent line
         pygame.draw.line(self.screen, RUNE_DIM, (0, horizon), (W, horizon), 1)
@@ -912,120 +1064,228 @@ class FPRenderer:
 
     def _draw_boss(self, hp_ratio: float, effects: List[dict], player_offset_x: float = 0.0) -> None:
         W, H = self.W, self.H
-        boss_shift = int(-player_offset_x * W * 0.03)
-        cx, cy = W // 2 + boss_shift, H // 2 - 28
         enraged = hp_ratio <= 0.35
 
-        # ── Shadow-cloak beneath body ───────────────────────────────────────
+        # ── 애니메이션 상태 감지 ─────────────────────────────────────────────
+        # 공격 판정: 보스 투사체가 수명 35% 이내 (막 발사됨)
+        is_attacking = any(
+            e.get("type") == "proj" and e.get("origin") == "boss"
+            and e.get("elapsed", 0) / max(e.get("dur", 1), 1) < 0.35
+            for e in effects
+        )
+        # 피격 판정: hp_ratio가 전 프레임보다 감소
+        if hp_ratio < self._boss_prev_hp_ratio - 0.004:
+            self._boss_hit_tick = self._tick
+        self._boss_prev_hp_ratio = hp_ratio
+        hit_age   = self._tick - self._boss_hit_tick
+        is_hit    = hit_age < 14
+
+        # ── 위치 + 부유 애니메이션 ──────────────────────────────────────────
+        float_y   = int(14 * math.sin(self._tick * 0.038))
+        float_x   = int(6  * math.sin(self._tick * 0.022))
+        boss_shift = int(-player_offset_x * W * 0.03)
+        atk_lean  = -12 if is_attacking else 0
+        recoil    = (min(hit_age, 4) * 4) if is_hit else 0
+
+        cx = W // 2 + boss_shift + float_x + atk_lean + recoil
+        cy = H // 2 - 28 + float_y
+        R  = int(72 * (1.08 if is_attacking else 1.0))
+
+        # ── 지면 그림자 ──────────────────────────────────────────────────────
+        if self._boss_sh_r != R:
+            self._boss_sh_surf = pygame.Surface((R * 3, 28), pygame.SRCALPHA)
+            pygame.draw.ellipse(self._boss_sh_surf, (0, 0, 0, 55), (0, 0, R * 3, 28))
+            self._boss_sh_r = R
+        self.screen.blit(self._boss_sh_surf, (cx - R * 3 // 2, cy + R - 8))
+
+        # ── 클로크 / 로브 (흔들림 애니메이션) ───────────────────────────────
+        csway = int(5 * math.sin(self._tick * 0.028))
         cloak_pts = [
-            (cx - 58, cy + 62), (cx - 88, cy + 108), (cx - 50, cy + 118),
-            (cx, cy + 124),     (cx + 50, cy + 118),  (cx + 88, cy + 108),
-            (cx + 58, cy + 62),
+            (cx - 60 + csway, cy + 58),
+            (cx - 92 + csway, cy + 112), (cx - 54, cy + 124),
+            (cx,              cy + 130),
+            (cx + 54,         cy + 124), (cx + 92 - csway, cy + 112),
+            (cx + 60 - csway, cy + 58),
         ]
         pygame.draw.polygon(self.screen, (6, 2, 14), cloak_pts)
-        cloak_rim = tuple(max(0, c - 10) for c in ((60, 20, 80)))
-        pygame.draw.polygon(self.screen, cloak_rim, cloak_pts, 2)  # type: ignore
+        pygame.draw.polygon(self.screen, (52, 18, 72), cloak_pts, 2)
+        # 클로크 내부 음영선
+        for k in range(5):
+            lx  = cx - 55 + k * 22 + csway * (1 - k * 0.35)
+            lx2 = lx + int(3 * math.sin(self._tick * 0.03 + k))
+            pygame.draw.line(self.screen, (14, 6, 24), (int(lx), cy + 62), (int(lx2), cy + 122), 1)
 
-        # ── Outer aura ──────────────────────────────────────────────────────
+        # ── 바깥 오오라 ─────────────────────────────────────────────────────
         if enraged:
-            aura_r   = int(96 + 14 * math.sin(self._tick * 0.09))
+            aura_r   = int(R + 30 + 18 * math.sin(self._tick * 0.09))
             aura_col = self._pulse_color((200, 20, 0), (255, 80, 0), self._tick, 28)
         else:
-            aura_r   = int(78 + 10 * math.sin(self._tick * 0.05))
+            aura_r   = int(R + 16 + 12 * math.sin(self._tick * 0.05))
             aura_col = self._pulse_color((80, 10, 10), (190, 45, 45), self._tick, 55)
-        self._draw_glow(cx, cy, aura_r, aura_col, layers=8)
+        if is_attacking:
+            aura_r   += 22
+            aura_col  = (min(255, aura_col[0] + 55), aura_col[1], aura_col[2])
+        self._draw_glow(cx, cy, aura_r, aura_col, layers=9)
 
-        # ── Horns ───────────────────────────────────────────────────────────
-        horn_col = (80, 12, 12)
-        horn_rim = (160, 55, 55)
-        for side, twist in ((-1, -6), (1, 6)):
-            hbx = cx + side * 20
-            hby = cy - 63
-            htx = cx + side * (30 + twist)
-            hty = cy - 112
-            pts_h = [(hbx - 9, hby), (htx, hty), (hbx + 9, hby)]
-            pygame.draw.polygon(self.screen, horn_col, pts_h)
-            pygame.draw.polygon(self.screen, horn_rim, pts_h, 1)
-            # Horn tip glow
-            self._draw_glow(htx, hty, 5, horn_rim, layers=2)
+        # ── 3D 구체 몸체 (상-좌 광원, 레이어드 원으로 구현) ─────────────────
+        # 가장 어두운 외곽 → 상-좌 쪽으로 offset된 밝은 레이어 = 입체감
+        layers_3d = [
+            (0,   0,   R,      (22,  3,  3)),
+            (-4, -4,   R - 9,  (105, 18, 18) if not enraged else (148, 22,  8)),
+            (-10,-10,  R - 21, (168, 40, 22) if not enraged else (218, 55, 12)),
+            (-16,-17,  R - 35, (218, 65, 38) if not enraged else (255, 88, 18)),
+            (-21,-23,  R - 49, (248, 96, 58) if not enraged else (255,125, 32)),
+        ]
+        for ox, oy, lr, lc in layers_3d:
+            if lr > 0:
+                fc = (255, 240, 210) if is_hit and lr == R - 49 else lc
+                pygame.draw.circle(self.screen, fc, (cx + ox, cy + oy), lr)
 
-        # ── Body ────────────────────────────────────────────────────────────
-        body_col = (200, 40, 20) if enraged else (170, 35, 35)
-        rim_col  = (255, 90, 30) if enraged else (220, 70, 70)
-        pygame.draw.circle(self.screen, body_col, (cx, cy), 70)
-        pygame.draw.circle(self.screen, rim_col,  (cx, cy), 70, 3)
-        pygame.draw.circle(self.screen, (90, 16, 16), (cx + 7, cy + 7), 57)
+        # 외곽 림 라이트 (뒷면 역광)
+        if enraged:
+            rim_c = self._pulse_color((255, 70, 0), (255, 180, 0), self._tick, 20)
+        else:
+            rim_c = (190, 55, 55)
+        pygame.draw.circle(self.screen, rim_c, (cx, cy), R, 3)
 
-        # ── Rotating arcane rune markings on body ──────────────────────────
+        # 반사광 하이라이트 (소프트)
+        if self._boss_hl_r != R:
+            self._boss_hl_surf = pygame.Surface((R, R), pygame.SRCALPHA)
+            pygame.draw.circle(self._boss_hl_surf, (255, 200, 160, 85),
+                               (R // 2 - 9, R // 2 - 11), R // 3)
+            self._boss_hl_r = R
+        self.screen.blit(self._boss_hl_surf, (cx - R // 2 - 9, cy - R // 2 - 11))
+        # 정반사 점
+        pygame.draw.circle(self.screen, (255, 205, 165), (cx - 26, cy - 30), 7)
+        pygame.draw.circle(self.screen, (255, 248, 240), (cx - 28, cy - 32), 3)
+
+        # ── 뿔 (메인 2개 + 보조 2개) ────────────────────────────────────────
+        hswing = int(5 * math.sin(self._tick * 0.04)) if is_attacking else 0
+        horn_col, horn_rim_c = (78, 10, 10), (195, 65, 48)
+        for side, twist in ((-1, -9), (1, 9)):
+            hbx  = cx + side * 23
+            hby  = cy - R + 10
+            htx  = cx + side * (40 + twist + hswing * side)
+            hty  = cy - R - 54
+            mid  = (hbx + side * 12, (hby + hty) // 2 - 10)
+            pts  = [(hbx - 10, hby), mid, (htx, hty), (htx + side * 3, hty),
+                    (mid[0] + side * 10, mid[1] + 4), (hbx + 10, hby)]
+            pygame.draw.polygon(self.screen, horn_col, pts)
+            pygame.draw.polygon(self.screen, horn_rim_c, pts, 1)
+            self._draw_glow(htx, hty, 5, horn_rim_c, layers=2)
+        # 보조 뿔 (작은 측면)
+        for side in (-1, 1):
+            sx, sy = cx + side * 54, cy - R + 18
+            ex, ey = cx + side * 70, cy - R - 6
+            pygame.draw.polygon(self.screen, (58, 8, 8),
+                                [(sx - 5, sy), (ex, ey), (sx + 5, sy)])
+            pygame.draw.polygon(self.screen, (130, 38, 28),
+                                [(sx - 5, sy), (ex, ey), (sx + 5, sy)], 1)
+
+        # ── 아케인 룬 마킹 ────────────────────────────────────────────────────
         rune_a1  = self._tick * 0.020
         rune_a2  = -self._tick * 0.030 + math.pi / 6
-        rune_col = self._pulse_color((200, 70, 60), (255, 150, 100), self._tick, 55)
+        rune_col = self._pulse_color((200, 70, 60), (255, 155, 105), self._tick, 55)
         for i in range(6):
-            a = rune_a1 + i * math.pi / 3
-            rx, ry = cx + int(50 * math.cos(a)), cy + int(50 * math.sin(a))
+            a  = rune_a1 + i * math.pi / 3
+            rx = cx + int(50 * math.cos(a))
+            ry = cy + int(50 * math.sin(a))
             pygame.draw.circle(self.screen, rune_col, (rx, ry), 4)
             pygame.draw.line(self.screen, rune_col, (cx, cy), (rx, ry), 1)
         for i in range(4):
-            a = rune_a2 + i * math.pi / 2
-            rx, ry = cx + int(28 * math.cos(a)), cy + int(28 * math.sin(a))
-            pygame.draw.circle(self.screen, (220, 110, 80), (rx, ry), 3)
+            a  = rune_a2 + i * math.pi / 2
+            rx = cx + int(28 * math.cos(a))
+            ry = cy + int(28 * math.sin(a))
+            pygame.draw.circle(self.screen, (218, 108, 78), (rx, ry), 3)
 
-        # ── Eyes (slit pupils) ──────────────────────────────────────────────
+        # ── 눈 (플레이어 방향 추적) ───────────────────────────────────────────
+        look_dx = int(player_offset_x * 5)
         for ex_off in (-22, 22):
-            ex_abs, ey_abs = cx + ex_off, cy - 14
-            pygame.draw.circle(self.screen, (0, 0, 0), (ex_abs, ey_abs), 11)
-            if enraged:
+            ex_abs = cx + ex_off + look_dx // 2
+            ey_abs = cy - 14
+            pygame.draw.circle(self.screen, (0, 0, 0), (ex_abs, ey_abs), 13)
+            if is_hit:
+                iris_c = (255, 255, 100)
+            elif enraged:
                 iris_c = self._pulse_color((255, 100, 0), (255, 220, 0), self._tick, 20)
             else:
                 iris_c = self._pulse_color((255, 80, 40), (255, 220, 60), self._tick, 50)
-            pygame.draw.circle(self.screen, iris_c, (ex_abs, ey_abs), 7)
-            # Slit pupil (vertical diamond)
+            pygame.draw.circle(self.screen, iris_c, (ex_abs, ey_abs), 8)
+            p_off = max(-3, min(3, look_dx // 3))
             pupil = [
-                (ex_abs,     ey_abs - 5),
-                (ex_abs + 2, ey_abs),
-                (ex_abs,     ey_abs + 5),
-                (ex_abs - 2, ey_abs),
+                (ex_abs + p_off,     ey_abs - 6),
+                (ex_abs + p_off + 2, ey_abs),
+                (ex_abs + p_off,     ey_abs + 6),
+                (ex_abs + p_off - 2, ey_abs),
             ]
             pygame.draw.polygon(self.screen, (0, 0, 0), pupil)
-            pygame.draw.circle(self.screen, WHITE, (ex_abs - 3, ey_abs - 3), 2)
+            pygame.draw.circle(self.screen, WHITE, (ex_abs - 4 + p_off, ey_abs - 4), 2)
 
-        # ── Mouth / grin ────────────────────────────────────────────────────
-        pygame.draw.arc(self.screen, (240, 80, 40),
-                        (cx - 32, cy + 6, 64, 26), math.pi, 2 * math.pi, 3)
-        for i in range(5):
-            tx = cx - 24 + i * 12
-            th = 11 if (enraged and i % 2 == 0) else 7
-            pygame.draw.polygon(self.screen, WHITE, [
-                (tx, cy + 16), (tx + 6, cy + 16), (tx + 3, cy + 16 + th)
-            ])
+        # ── 입 (공격 모션: 열림) ─────────────────────────────────────────────
+        if is_attacking:
+            pygame.draw.ellipse(self.screen, (10, 0, 0), (cx - 30, cy + 8, 60, 26))
+            pygame.draw.arc(self.screen, (240, 80, 40),
+                            (cx - 30, cy + 8, 60, 26), math.pi, 2 * math.pi, 3)
+            for i in range(5):
+                tx = cx - 22 + i * 11
+                pygame.draw.polygon(self.screen, WHITE,
+                                    [(tx, cy + 16), (tx + 5, cy + 16), (tx + 2, cy + 22)])
+            ec = self._pulse_color((255, 60, 0), (255, 200, 100), self._tick, 12)
+            pygame.draw.ellipse(self.screen, ec, (cx - 14, cy + 24, 28, 10))
+        else:
+            pygame.draw.arc(self.screen, (240, 80, 40),
+                            (cx - 32, cy + 6, 64, 26), math.pi, 2 * math.pi, 3)
+            for i in range(5):
+                tx = cx - 24 + i * 12
+                th = 11 if (enraged and i % 2 == 0) else 7
+                pygame.draw.polygon(self.screen, WHITE,
+                                    [(tx, cy + 16), (tx + 6, cy + 16), (tx + 3, cy + 16 + th)])
 
-        # ── Energy tendrils ─────────────────────────────────────────────────
-        tc_count = 5 if enraged else 3
+        # ── 에너지 촉수 ─────────────────────────────────────────────────────
+        tc_count = 6 if enraged else 4
+        if is_attacking:
+            tc_count += 2
         for i in range(tc_count):
             base_a = self._tick * 0.038 + i * (math.pi * 2 / tc_count)
-            for j in range(10):
-                jt   = j / 10.0
-                ja   = base_a + math.sin(jt * math.pi * 2 + self._tick * 0.12) * 0.55
-                tx_d = cx + int((72 + 38 * jt) * math.cos(ja))
-                ty_d = cy + int((72 + 38 * jt) * math.sin(ja))
+            for j in range(12):
+                jt   = j / 12.0
+                ja   = base_a + math.sin(jt * math.pi * 2 + self._tick * 0.12) * 0.65
+                tx_d = cx + int((R + 8 + 46 * jt) * math.cos(ja))
+                ty_d = cy + int((R + 8 + 46 * jt) * math.sin(ja))
                 fr   = max(1, 4 - j // 3)
                 fc_t = tuple(int(c * (1.0 - jt * 0.85)) for c in aura_col)
                 pygame.draw.circle(self.screen, fc_t, (tx_d, ty_d), fr)  # type: ignore
 
-        # ── HP bar ──────────────────────────────────────────────────────────
-        bw, bh = 168, 13
+        # ── 피격 충격파 링 ────────────────────────────────────────────────────
+        if is_hit:
+            fr_val = R + 14 + hit_age * 7
+            fa     = max(0, int(210 * (1.0 - hit_age / 14.0)))
+            if fa > 0:
+                fs = pygame.Surface((fr_val * 2 + 6, fr_val * 2 + 6), pygame.SRCALPHA)
+                pygame.draw.circle(fs, (255, 255, 255, fa),
+                                   (fr_val + 3, fr_val + 3), fr_val, 5)
+                self.screen.blit(fs, (cx - fr_val - 3, cy - fr_val - 3))
+
+        # ── 공격 플래시 링 ────────────────────────────────────────────────────
+        if is_attacking:
+            atk_c = self._pulse_color((255, 100, 0), (255, 230, 0), self._tick, 8)
+            pygame.draw.circle(self.screen, atk_c, (cx, cy), R + 8, 5)
+
+        # ── HP 바 ─────────────────────────────────────────────────────────────
+        bw, bh = 200, 14
         bx = cx - bw // 2
-        by = cy - 102
-        pygame.draw.rect(self.screen, (22, 4, 4), (bx - 2, by - 2, bw + 4, bh + 4), border_radius=5)
-        pygame.draw.rect(self.screen, (38, 14, 14), (bx, by, bw, bh), border_radius=5)
+        by = cy - R - 34
+        pygame.draw.rect(self.screen, (22, 4, 4),   (bx - 2, by - 2, bw + 4, bh + 4), border_radius=5)
+        pygame.draw.rect(self.screen, (38, 14, 14),  (bx, by, bw, bh), border_radius=5)
         if int(bw * hp_ratio) > 0:
             fill_col = self._pulse_color((220, 30, 30), (255, 110, 0), self._tick, 22) \
                 if enraged else self._lerp_color((220, 30, 30), GOLD, hp_ratio)
-            pygame.draw.rect(self.screen, fill_col, (bx, by, int(bw * hp_ratio), bh), border_radius=5)
+            pygame.draw.rect(self.screen, fill_col,
+                             (bx, by, int(bw * hp_ratio), bh), border_radius=5)
         pygame.draw.rect(self.screen, GREY, (bx, by, bw, bh), 1, border_radius=5)
         lbl_txt = "!! ARCANE BOSS — ENRAGED !!" if enraged else "ARCANE BOSS"
         lbl_col = (255, 110, 0) if enraged else GREY
-        hp_lbl = self.font.render(lbl_txt, True, lbl_col)
+        hp_lbl  = self.font.render(lbl_txt, True, lbl_col)
         self.screen.blit(hp_lbl, hp_lbl.get_rect(center=(cx, by - 14)))
 
     # ── Wand ───────────────────────────────────────────────────────────────────
@@ -1034,73 +1294,159 @@ class FPRenderer:
         W, H = self.W, self.H
         wand_shift = int(player_offset_x * W * 0.06)
 
-        # Idle breathing bob
-        bob = int(math.sin(self._tick * 0.045) * 5)
-        wx_b = int(W * 0.82) + wand_shift
-        wy_b = H + 10 + bob // 4
-        wx_t = int(W * 0.61) + wand_shift
-        wy_t = int(H * 0.71) + bob
+        # ── 호흡 + 미세 흔들림 애니메이션 ──────────────────────────────────
+        bob   = int(math.sin(self._tick * 0.045) * 5)
+        sway  = int(math.sin(self._tick * 0.019) * 2)
+        wx_b  = int(W * 0.82) + wand_shift + sway
+        wy_b  = H + 12 + bob // 4
+        wx_t  = int(W * 0.61) + wand_shift + sway // 2
+        wy_t  = int(H * 0.71) + bob
 
-        # ── Hand / palm ────────────────────────────────────────────────────
-        skin     = (195, 148, 108)
-        skin_shd = (140, 100, 72)
-        hx, hy   = wx_b - 22, wy_b - 34 + bob // 4
-
-        pygame.draw.ellipse(self.screen, skin_shd, (hx - 20, hy - 14, 46, 36))
-        pygame.draw.ellipse(self.screen, skin,     (hx - 18, hy - 12, 42, 32))
-
-        # Four fingers curled around shaft
-        for fi in range(4):
-            fx = hx - 10 + fi * 8
-            fy = hy - 13 - fi % 2 * 4
-            fr = 5 if fi < 3 else 4
-            pygame.draw.circle(self.screen, skin, (fx, fy), fr)
-        # Thumb
-        pygame.draw.circle(self.screen, skin, (hx - 14, hy - 3), 6)
-
-        # Knuckle shadow
-        pygame.draw.line(self.screen, skin_shd, (hx - 18, hy - 8), (hx + 18, hy - 8), 2)
-
-        # ── Wand shaft ─────────────────────────────────────────────────────
-        pygame.draw.line(self.screen, (44, 28, 10),  (wx_b, wy_b), (wx_t, wy_t), 10)
-        pygame.draw.line(self.screen, (82, 56, 24),  (wx_b - 3, wy_b - 5), (wx_t - 3, wy_t - 5), 3)
-        pygame.draw.line(self.screen, (120, 88, 44), (wx_b - 4, wy_b - 6), (wx_t - 4, wy_t - 6), 1)
-
-        # ── Rune wrappings along shaft ──────────────────────────────────────
+        # ── 로브 소매 (전완부) ──────────────────────────────────────────────
+        slv_pts = [
+            (W,        wy_b + 22),
+            (wx_b + 52, wy_b + 20),
+            (wx_b + 12, wy_b - 22),
+            (wx_b - 42, wy_b - 32),
+            (W,        wy_b - 14),
+        ]
+        pygame.draw.polygon(self.screen, (20, 10, 38), slv_pts)   # 어두운 보라색 로브
+        pygame.draw.polygon(self.screen, (52, 28, 88), slv_pts, 2)
+        # 소매 주름선
         for k in range(4):
-            t_wrap = 0.18 + k * 0.18
-            ww_x = int(wx_b + (wx_t - wx_b) * t_wrap)
-            ww_y = int(wy_b + (wy_t - wy_b) * t_wrap)
-            wc   = self._pulse_color(RUNE_DIM, RUNE_GLO, self._tick + k * 25, 70)
-            pygame.draw.circle(self.screen, (30, 50, 90), (ww_x, ww_y), 7, 3)
-            pygame.draw.circle(self.screen, wc,           (ww_x, ww_y), 5, 1)
+            fx0 = wx_b + 44 - k * 22
+            fy0 = wy_b + 14
+            fy1 = wy_b - 22
+            sc  = (22 + k * 8, 12 + k * 4, 40 + k * 12)
+            pygame.draw.line(self.screen, sc, (fx0, fy0), (fx0 - 8, fy1), 1)
 
-        # ── Faceted gem at tip ──────────────────────────────────────────────
-        gem_col  = self._pulse_color((90, 70, 220),  (190, 150, 255), self._tick, 50)
+        # 소매 커프 (장식 밴드)
+        cuff_pts = [
+            (wx_b - 40, wy_b - 30), (wx_b + 18, wy_b - 18),
+            (wx_b + 22, wy_b - 6),  (wx_b - 42, wy_b - 18),
+        ]
+        pygame.draw.polygon(self.screen, (58, 32, 98), cuff_pts)
+        pygame.draw.polygon(self.screen, (108, 68, 158), cuff_pts, 1)
+        for k in range(3):
+            gx = wx_b - 20 + k * 16
+            gc = self._pulse_color((100, 60, 200), (180, 130, 255), self._tick + k * 22, 60)
+            pygame.draw.circle(self.screen, gc, (gx, wy_b - 22), 3)
+
+        # ── 손 (팜 + 손가락 마디 표현) ─────────────────────────────────────
+        skin     = (196, 150, 110)
+        skin_mid = (175, 128,  88)
+        skin_shd = (138,  96,  66)
+        hx, hy   = wx_b - 22, wy_b - 36 + bob // 4
+
+        # 팜 (3레이어로 입체감)
+        pygame.draw.ellipse(self.screen, skin_shd, (hx - 22, hy - 16, 50, 40))
+        pygame.draw.ellipse(self.screen, skin_mid, (hx - 20, hy - 15, 47, 37))
+        pygame.draw.ellipse(self.screen, skin,     (hx - 18, hy - 13, 43, 33))
+        # 팜 하이라이트
+        pygame.draw.ellipse(self.screen, (216, 170, 130), (hx - 10, hy - 12, 18, 12))
+        # 손등 주름
+        pygame.draw.line(self.screen, skin_shd, (hx - 16, hy - 11), (hx + 16, hy - 11), 2)
+        pygame.draw.line(self.screen, skin_shd, (hx - 12, hy - 6),  (hx + 12, hy - 6),  1)
+
+        # 손가락 (4개 — 마디 2개씩)
+        f_data = [(-12, 1), (-4, 0), (4, 1), (12, 0)]
+        for fi, (fx_off, bend) in enumerate(f_data):
+            fx = hx + fx_off
+            fy = hy - 15
+            seg1 = 10 + fi % 2
+            seg2 = 7
+            # 근위 마디
+            ex1, ey1 = fx + bend, fy - seg1
+            pygame.draw.line(self.screen, skin_shd, (fx, fy), (ex1, ey1), 6)
+            pygame.draw.line(self.screen, skin_mid, (fx, fy), (ex1, ey1), 5)
+            pygame.draw.line(self.screen, skin,     (fx, fy), (ex1, ey1), 3)
+            # 원위 마디
+            ex2, ey2 = ex1 + bend, ey1 - seg2
+            pygame.draw.line(self.screen, skin_shd, (ex1, ey1), (ex2, ey2), 5)
+            pygame.draw.line(self.screen, skin_mid, (ex1, ey1), (ex2, ey2), 4)
+            pygame.draw.line(self.screen, skin,     (ex1, ey1), (ex2, ey2), 2)
+            # 손끝 + 손톱
+            pygame.draw.circle(self.screen, skin_mid, (ex2, ey2), 4)
+            pygame.draw.circle(self.screen, skin,     (ex2, ey2), 3)
+            pygame.draw.circle(self.screen, (216, 175, 148), (ex2, ey2 - 1), 1)
+
+        # 엄지
+        pygame.draw.line(self.screen, skin_shd, (hx - 18, hy - 2), (hx - 27, hy - 10), 7)
+        pygame.draw.line(self.screen, skin_mid, (hx - 18, hy - 2), (hx - 27, hy - 10), 6)
+        pygame.draw.line(self.screen, skin,     (hx - 18, hy - 2), (hx - 27, hy - 10), 4)
+        pygame.draw.circle(self.screen, skin_mid, (hx - 27, hy - 14), 5)
+        pygame.draw.circle(self.screen, skin,     (hx - 27, hy - 14), 4)
+
+        # ── 완드 샤프트 (레이어드 목재 + 하이라이트) ─────────────────────────
+        pygame.draw.line(self.screen, (22, 12, 4),   (wx_b, wy_b), (wx_t, wy_t), 13)  # 그림자
+        pygame.draw.line(self.screen, (50, 32, 12),  (wx_b, wy_b), (wx_t, wy_t), 10)  # 베이스
+        pygame.draw.line(self.screen, (74, 50, 20),  (wx_b - 2, wy_b - 3), (wx_t - 2, wy_t - 3), 6)
+        pygame.draw.line(self.screen, (102, 72, 32), (wx_b - 3, wy_b - 5), (wx_t - 3, wy_t - 5), 3)
+        pygame.draw.line(self.screen, (138, 102, 52),(wx_b - 4, wy_b - 6), (wx_t - 4, wy_t - 6), 1)
+        # 나뭇결 (짧은 사선)
+        for k in range(6):
+            gt = 0.1 + k * 0.14
+            gx = int(wx_b + (wx_t - wx_b) * gt)
+            gy = int(wy_b + (wy_t - wy_b) * gt)
+            pygame.draw.line(self.screen, (60, 40, 14), (gx, gy), (gx - 3, gy + 1), 1)
+
+        # ── 메탈 밴드 ────────────────────────────────────────────────────────
+        for k in range(3):
+            bt  = 0.22 + k * 0.24
+            bx_ = int(wx_b + (wx_t - wx_b) * bt)
+            by_ = int(wy_b + (wy_t - wy_b) * bt)
+            bc  = self._pulse_color((80, 70, 130), (150, 135, 210), self._tick + k * 24, 80)
+            pygame.draw.circle(self.screen, (28, 18, 58), (bx_, by_), 9, 5)
+            pygame.draw.circle(self.screen, bc,           (bx_, by_), 8, 2)
+            pygame.draw.circle(self.screen, (185, 165, 225), (bx_ - 2, by_ - 2), 2)
+
+        # ── 젬 (8각형 다이아몬드) ────────────────────────────────────────────
+        gem_col  = self._pulse_color((90,  70, 220), (190, 150, 255), self._tick, 50)
         gem_core = self._pulse_color((150, 120, 255), (220, 200, 255), self._tick, 38)
-        gr = 10
-        self._draw_glow(wx_t, wy_t, gr + 14, gem_col, layers=7)
+        gem_hot  = self._pulse_color((200, 180, 255), (255, 245, 255), self._tick, 28)
+        gr = 12
 
+        self._draw_glow(wx_t, wy_t, gr + 20, gem_col, layers=10)
+
+        # 8각형 외곽
         gem_pts = [
-            (wx_t,      wy_t - gr),
-            (wx_t + gr, wy_t),
-            (wx_t,      wy_t + gr),
-            (wx_t - gr, wy_t),
+            (wx_t,           wy_t - gr),
+            (wx_t + gr // 2, wy_t - gr // 2),
+            (wx_t + gr,      wy_t),
+            (wx_t + gr // 2, wy_t + gr // 2),
+            (wx_t,           wy_t + gr),
+            (wx_t - gr // 2, wy_t + gr // 2),
+            (wx_t - gr,      wy_t),
+            (wx_t - gr // 2, wy_t - gr // 2),
         ]
         pygame.draw.polygon(self.screen, gem_col, gem_pts)
-        # Facet inner lines
-        for gp in gem_pts:
-            pygame.draw.line(self.screen, gem_core, (wx_t, wy_t), gp, 1)
-        pygame.draw.polygon(self.screen, gem_core, gem_pts, 1)
-        pygame.draw.circle(self.screen, WHITE, (wx_t - 3, wy_t - 3), 2)
+        # 내부 8각형 (페이셋)
+        igem = [
+            (int(wx_t + (px - wx_t) * 0.52), int(wy_t + (py - wy_t) * 0.52))
+            for px, py in gem_pts
+        ]
+        pygame.draw.polygon(self.screen, gem_core, igem)
+        # 페이셋 라인
+        for i, gp in enumerate(gem_pts):
+            pygame.draw.line(self.screen, gem_hot, gp, igem[i], 1)
+        pygame.draw.polygon(self.screen, gem_hot, gem_pts, 1)
+        # 젬 하이라이트
+        pygame.draw.circle(self.screen, (255, 255, 255), (wx_t - 4, wy_t - 5), 3)
+        pygame.draw.circle(self.screen, (210, 190, 255), (wx_t + 3, wy_t + 3), 2)
 
-        # ── Orbiting energy particles ───────────────────────────────────────
-        for k in range(3):
-            a   = self._tick * 0.11 + k * math.pi * 2 / 3
-            opx = wx_t + int(14 * math.cos(a))
-            opy = wy_t + int(9  * math.sin(a))
-            oc  = self._pulse_color(gem_col, WHITE, self._tick + k * 18, 28)
+        # ── 정방향 궤도 파티클 (5개) ─────────────────────────────────────────
+        for k in range(5):
+            a   = self._tick * 0.11 + k * math.pi * 2 / 5
+            opx = wx_t + int(17 * math.cos(a))
+            opy = wy_t + int(11 * math.sin(a))
+            oc  = self._pulse_color(gem_col, WHITE, self._tick + k * 14, 22)
             pygame.draw.circle(self.screen, oc, (opx, opy), 2)
+        # 역방향 소형 궤도 파티클 (3개)
+        for k in range(3):
+            a   = -self._tick * 0.18 + k * math.pi * 2 / 3
+            opx = wx_t + int(10 * math.cos(a))
+            opy = wy_t + int(7  * math.sin(a))
+            pygame.draw.circle(self.screen, gem_hot, (opx, opy), 1)
 
     # ── Effects ────────────────────────────────────────────────────────────────
 
@@ -1219,15 +1565,20 @@ class FPRenderer:
             sh_str = f"SHIELD  {shield_time_left / 1000.0:.1f}s"
             self._draw_chip(chip_x, chip_y, sh_str, CYAN)
 
-        # Difficulty badge (top-right)
+        # Difficulty badge (top-right, 일시정지 버튼 왼쪽)
         diff_colors = {"easy": GREEN, "normal": YELLOW, "hard": ORANGE, "impossible": RED}
         dc = diff_colors.get(difficulty, WHITE)
         badge = self.font.render(f"[{difficulty.upper()}]", True, dc)
-        self.screen.blit(badge, (W - badge.get_width() - 14, 14))
+        self.screen.blit(badge, (W - badge.get_width() - 82, 14))
 
-        # ESC hint
-        esc = self.font.render("ESC: quit", True, GREY)
-        self.screen.blit(esc, (W - esc.get_width() - 14, H - 22))
+        # 일시정지 버튼 (우측 상단)
+        pb = pygame.Rect(W - 68, 10, 58, 28)
+        pb_bg = pygame.Surface((58, 28), pygame.SRCALPHA)
+        pb_bg.fill((0, 0, 0, 160))
+        self.screen.blit(pb_bg, pb.topleft)
+        pygame.draw.rect(self.screen, CYAN, pb, 1, border_radius=5)
+        pb_s = self.font_game_tab.render("II ESC", True, CYAN)
+        self.screen.blit(pb_s, pb_s.get_rect(center=pb.center))
 
     def _draw_hp_panel(
         self,
@@ -1726,7 +2077,26 @@ class FPRenderer:
 
     @staticmethod
     def _make_kor_font(size: int) -> pygame.font.Font:
-        """Returns a system font capable of rendering Korean characters."""
+        """Returns a bold font capable of rendering Korean characters.
+
+        Windows 폰트 파일을 직접 로드하여 SysFont fallback 시 깨지는 문제를 방지한다.
+        """
+        import os
+        # 직접 파일 로드 (가장 안정적 — Windows 기본 한국어 폰트)
+        win_paths = [
+            "C:/Windows/Fonts/malgunbd.ttf",   # Malgun Gothic Bold
+            "C:/Windows/Fonts/malgun.ttf",     # Malgun Gothic Regular
+            "C:/Windows/Fonts/gulim.ttc",      # 굴림
+            "C:/Windows/Fonts/dotum.ttc",      # 돋움
+            "C:/Windows/Fonts/batang.ttc",     # 바탕
+        ]
+        for path in win_paths:
+            if os.path.exists(path):
+                try:
+                    return pygame.font.Font(path, size)
+                except Exception:
+                    pass
+        # SysFont fallback (bold 제거 — 깨짐 방지)
         for name in ("malgungothic", "malgun gothic", "gulim", "dotum", "batang"):
             try:
                 f = pygame.font.SysFont(name, size)
@@ -1734,6 +2104,7 @@ class FPRenderer:
                     return f
             except Exception:
                 pass
+        # 최후 fallback — 한국어 미지원일 수 있음
         return pygame.font.SysFont(None, size)
 
     @staticmethod

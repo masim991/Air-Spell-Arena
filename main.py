@@ -54,10 +54,15 @@ def run() -> int:
         while running:
             # 1) 카메라 1프레임 처리
             if USE_HAND_TRACKING:
-                if not run_vision_loop(cap, traj_buffer,
-                                       gesture_analyzer=analyzer,
-                                       show_debug=SHOW_DEBUG_WINDOWS):
+                try:
+                    if not run_vision_loop(cap, traj_buffer,
+                                           gesture_analyzer=analyzer,
+                                           show_debug=SHOW_DEBUG_WINDOWS):
+                        break
+                except KeyboardInterrupt:
                     break
+                except Exception as _vl_err:
+                    print(f"[vision] 프레임 처리 오류 (건너뜀): {_vl_err}")
             else:
                 data = canvas.update()
                 if data is None:
