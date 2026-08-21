@@ -64,6 +64,7 @@ class GestureConfig:
     resample_points: int = 32
     min_length_px: float = 45.0
     circle_close_ratio: float = 0.30
+    circle_min_turning_deg: float = 260.0   # 누적 회전각(한 바퀴 ≈ 360°)
     zigzag_min_turns: int = 4
     sharp_turn_deg: float = 60.0
     horizontal_ratio: float = 0.65   # LIGHT/DARK 수평 우세 비율
@@ -159,16 +160,17 @@ class GestureAnalyzer:
         if abs(dx) >= abs(dy) * self._cfg.horizontal_ratio and abs(dx) >= 0.16 * length:
             return "LIGHT" if dx < 0 else "DARK"
 
-        # 원 그리기 → CIRCLE (쉼드)
-        if start_end <= length * self._cfg.circle_close_ratio:
-            turns = _count_turns(pts, deg_threshold=self._cfg.sharp_turn_deg)
-            if turns >= 4:
-                return "CIRCLE"
-
         # 지그재그 → ZIGZAG (라이트닝)
+        # 원보다 먼저 검사합니다: 원은 급격한 턴이 없고, 지그재그는 시작/끝이 가까울 수 있습니다.
         turns = _count_turns(pts, deg_threshold=self._cfg.sharp_turn_deg)
         if turns >= self._cfg.zigzag_min_turns:
             return "ZIGZAG"
+
+        # 원 그리기 → CIRCLE (실드)
+        # 부드러운 원은 급격한 턴이 없으므로, 누적 회전각(≈360°)으로 판정합니다.
+        if start_end <= length * self._cfg.circle_close_ratio:
+            if _total_turning_deg(pts) >= self._cfg.circle_min_turning_deg:
+                return "CIRCLE"
 
         return "UNKNOWN"
 
@@ -211,7 +213,14 @@ def _resample_polyline(pts: Trajectory, n: int) -> Trajectory:
             ny = prev[1] + (cur[1] - prev[1]) * t
             newp = (int(nx), int(ny))
             out.append(newp)
-            prev = newp
+            if len(out) >= n:
+                break
+            if newp == prev:
+                # 정수 반올림으로 진행이 멈춰 무한 루프가 되는 경우(아주 짧은 궤적) 방지
+                prev = cur
+                i += 1
+            else:
+                prev = newp
             acc = 0.0
         else:
             acc += seg
@@ -256,6 +265,14 @@ def _angle_deg(a: Point, b: Point, c: Point) -> float:
     dot = bax * bcx + bay * bcy
     cosv = max(-1.0, min(1.0, dot / (v1 * v2)))
     return math.degrees(math.acos(cosv))
+
+
+def _total_turning_deg(pts: Trajectory) -> float:
+    """경로의 누적 방향 전환각(도). 한 바퀴 도는 원은 약 360°가 됩니다."""
+    total = 0.0
+    for i in range(1, len(pts) - 1):
+        total += 180.0 - _angle_deg(pts[i - 1], pts[i], pts[i + 1])
+    return total
 
 
 def _count_turns(pts: Trajectory, deg_threshold: float) -> int:

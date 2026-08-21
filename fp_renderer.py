@@ -57,6 +57,16 @@ LTNG_NEON     = (100, 220, 255)  # Electric Blue
 PLAYER_MAX_HP = 100
 BOSS_MAX_HP   = 100
 
+ELEMENT_COLORS = {
+    "FIRE":  FIRE_NEON,
+    "WATER": WATER_NEON,
+    "WIND":  WIND_NEON,
+    "EARTH": EARTH_NEON,
+    "LIGHT": LIGHT_NEON,
+    "DARK":  DARK_NEON,
+    "LIGHTNING": LTNG_NEON,
+}
+
 # ── Audio-settings slot definitions ────────────────────────────────────────────
 _SLOT_ORDER  = ("bgm", "FIRE", "WATER", "WIND", "EARTH", "DARK", "LIGHT", "SHIELD")
 _SLOT_COLORS = {
@@ -433,7 +443,7 @@ class FPRenderer:
             clickables.append((toggle_rect, "toggle_custom", None))
 
         # ── 슬롯 탭 (2줄 × 4 = 8개) ──────────────────────────────────────
-        mx, my = 40, 40    # margin
+        mx = 40    # margin
         tab_gap = 8
         tab_w   = (W - mx * 2 - tab_gap * 3) // 4   # ≈199
         tab_h   = 32
@@ -720,6 +730,9 @@ class FPRenderer:
 
             y_cur += card_h + 7
 
+        # ── 콤보 / 보스 규칙 요약 (카드가 아닌 텍스트 블록) ──────────────────
+        y_cur = self._draw_guide_rules(y_cur, MX, SEC_H)
+
         # ── Back prompt with styled key-caps ───────────────────────────────
         remaining = H - y_cur
         ky_ = y_cur + remaining // 2 - 14
@@ -743,6 +756,35 @@ class FPRenderer:
         self.screen.blit(ret_s, ret_s.get_rect(center=(W // 2, ky_ + kh_ + 16)))
 
         pygame.display.flip()
+
+    def _draw_guide_rules(self, y_cur: int, mx: int, sec_h: int) -> int:
+        """가이드 화면 하단에 콤보/상성/보스 예고 규칙을 요약해 그리고, 다음 y를 반환합니다."""
+        W = self.W
+        lc = GOLD
+
+        # 섹션 헤더 (위 카드 섹션들과 동일한 스타일)
+        sh_bg = pygame.Surface((W - mx * 2, sec_h), pygame.SRCALPHA)
+        sh_bg.fill((lc[0] // 9, lc[1] // 9, lc[2] // 9, 180))
+        self.screen.blit(sh_bg, (mx, y_cur))
+        pygame.draw.line(self.screen, lc, (mx, y_cur + sec_h - 1), (W - mx, y_cur + sec_h - 1), 1)
+        pygame.draw.rect(self.screen, lc, (mx, y_cur, 3, sec_h))
+        sh_s = self.font_game_tab.render("COMBO / WEAKNESS / BOSS", True, lc)
+        self.screen.blit(sh_s, (mx + 9, y_cur + (sec_h - sh_s.get_height()) // 2))
+        y_cur += sec_h + 6
+
+        lines = [
+            ("1.2초 안에 기본 주문 2연속 → 콤보 발동 (화면 하단 게이지로 대기 시간 확인)", WHITE),
+            ("FIRE+WATER=STEAM   FIRE+FIRE=FLAME_BALL   WIND+FIRE=TORNADO   EARTH+FIRE=STONE_BULLET", CYAN),
+            ("WATER+FIRE=MUD   WATER+WATER=ICE_SHARD   LIGHT+DARK=BLINDNESS   DARK+LIGHT=CURSE_SHOCK", CYAN),
+            ("상단의 WEAKNESS 원소로 맞히면 피해 2배 + 보스 경직 / 상극 원소는 0.5배", GOLD),
+            ("보스는 공격 전 링으로 예고합니다. 붉게 물드는 광역기는 회피 불가 → SHIELD 필수", ORANGE),
+        ]
+        for text, col in lines:
+            surf = self.font_kor_small.render(text, True, col)
+            self.screen.blit(surf, (mx + 10, y_cur))
+            y_cur += surf.get_height() + 4
+
+        return y_cur
 
     def _draw_gesture_icon(
         self, cx: int, cy: int, icon: str, color: Tuple[int, int, int], tick: int
@@ -838,6 +880,11 @@ class FPRenderer:
         difficulty:        str = "normal",
         player_offset_x:   float = 0.0,
         dt_ms:             int = 16,
+        boss_weakness:     Optional[str] = None,
+        boss_phase:        int = 1,
+        telegraph_progress: Optional[float] = None,
+        telegraph_kind:    Optional[str] = None,
+        combo_hint:        Optional[Tuple[str, float]] = None,
     ) -> None:
         self._tick += 1
         
@@ -852,6 +899,10 @@ class FPRenderer:
 
         # 2. Boss (behind effects)
         self._draw_boss(boss_hp / BOSS_MAX_HP, effects, player_offset_x)
+
+        # 2.5. Boss attack telegraph (예고 링)
+        if telegraph_progress is not None:
+            self._draw_telegraph(telegraph_progress, telegraph_kind, player_offset_x)
 
         # 3. Effects (projectiles)
         self._draw_effects(effects, player_offset_x)
@@ -868,6 +919,9 @@ class FPRenderer:
 
         # 6. HUD
         self._draw_hud(player_hp, boss_hp, shield_time_left, lightning_cd_left, difficulty)
+        self._draw_boss_status(boss_weakness, boss_phase)
+        if combo_hint is not None:
+            self._draw_combo_hint(combo_hint)
 
         # 7. Spell message
         if message_time_left > 0 and message_text:
@@ -1579,6 +1633,82 @@ class FPRenderer:
         pygame.draw.rect(self.screen, CYAN, pb, 1, border_radius=5)
         pb_s = self.font_game_tab.render("II ESC", True, CYAN)
         self.screen.blit(pb_s, pb_s.get_rect(center=pb.center))
+
+    def _draw_telegraph(
+        self,
+        progress: float,
+        kind: Optional[str],
+        player_offset_x: float,
+    ) -> None:
+        """보스 공격 예고: 수축하는 링 + 종류 라벨. 링이 닫히는 순간 공격이 나갑니다."""
+        W, H = self.W, self.H
+        boss_shift = int(-player_offset_x * W * 0.03)
+        cx, cy = W // 2 + boss_shift, H // 2 - 28
+        p = max(0.0, min(1.0, progress))
+
+        col = ORANGE if kind != "aoe" else RED
+        r = int(240 - 150 * p)
+        width = 2 + int(4 * p)
+        pygame.draw.circle(self.screen, col, (cx, cy), r, width)
+        pygame.draw.circle(self.screen, col, (cx, cy), max(4, r - 10), 1)
+        self._draw_glow(cx, cy, max(8, int(24 * p)), col, layers=4)
+
+        if kind == "aoe":
+            # 광역기: 화면 전체가 붉게 물듦 → 실드 요구
+            ov = pygame.Surface((W, H), pygame.SRCALPHA)
+            ov.fill((255, 40, 40, int(60 * p)))
+            self.screen.blit(ov, (0, 0))
+        elif kind == "sweep":
+            # 스윕: 좌우로 훑는 경고 바 (고개를 크게 움직여야 회피 가능)
+            bar_h = 6 + int(10 * p)
+            ov = pygame.Surface((W, bar_h), pygame.SRCALPHA)
+            ov.fill((col[0], col[1], col[2], 90 + int(90 * p)))
+            self.screen.blit(ov, (0, H - 120))
+
+    def _draw_boss_status(self, weakness: Optional[str], phase: int) -> None:
+        """보스 약점 원소 배지 + 페이즈 표시 (상단 중앙)."""
+        if not weakness:
+            return
+        W = self.W
+        col = ELEMENT_COLORS.get(weakness, WHITE)
+        pulse = self._pulse_color(tuple(int(c * 0.55) for c in col), col, self._tick, 34)
+
+        text = f"WEAKNESS  {weakness}  x2"
+        surf = self.font.render(text, True, pulse)
+        pw, ph = surf.get_width() + 20, surf.get_height() + 10
+        px, py = W // 2 - pw // 2, 54
+
+        bg = pygame.Surface((pw, ph), pygame.SRCALPHA)
+        bg.fill((0, 0, 0, 170))
+        self.screen.blit(bg, (px, py))
+        pygame.draw.rect(self.screen, pulse, (px, py, pw, ph), 1, border_radius=5)
+        self.screen.blit(surf, (px + 10, py + 5))
+
+        ptext = self.font.render(f"PHASE {phase}", True, RED if phase == 3 else GOLD)
+        self.screen.blit(ptext, (W // 2 - ptext.get_width() // 2, py + ph + 4))
+
+    def _draw_combo_hint(self, combo_hint: Tuple[str, float]) -> None:
+        """콤보 대기 중인 기본 주문과 남은 입력 시간 게이지 (하단 중앙)."""
+        name, remain_ratio = combo_hint
+        W, H = self.W, self.H
+        col = ELEMENT_COLORS.get(name, CYAN)
+
+        text = f"{name}  +  ?"
+        surf = self.font_big.render(text, True, col)
+        pw, ph = surf.get_width() + 28, surf.get_height() + 20
+        px, py = W // 2 - pw // 2, H - 118
+
+        bg = pygame.Surface((pw, ph), pygame.SRCALPHA)
+        bg.fill((0, 0, 0, 170))
+        self.screen.blit(bg, (px, py))
+        pygame.draw.rect(self.screen, col, (px, py, pw, ph), 1, border_radius=6)
+        self.screen.blit(surf, (px + 14, py + 4))
+
+        bar_w = pw - 20
+        fill = int(bar_w * max(0.0, min(1.0, remain_ratio)))
+        pygame.draw.rect(self.screen, (30, 30, 40), (px + 10, py + ph - 12, bar_w, 6), border_radius=3)
+        if fill > 0:
+            pygame.draw.rect(self.screen, col, (px + 10, py + ph - 12, fill, 6), border_radius=3)
 
     def _draw_hp_panel(
         self,

@@ -12,7 +12,8 @@ main.py – OpenCV(air_canvas) + TrajectoryBuffer + GestureAnalyzer + Pygame(Spe
 - 필요 시 process_every_nth_frame 조절로 카메라 처리 주기를 낮출 수 있음(기본 1)
 """
 
-from typing import Optional
+import time
+from typing import Optional, Tuple
 
 import cv2
 
@@ -71,25 +72,36 @@ def run() -> int:
                 traj_buffer.update(data.center)
 
             # 3a) 포즈 기반 주문 (FIRE/WATER/EARTH/WIND) — run_vision_loop에서 포스팅
-            spell_name: Optional[str] = None
+            basic_spell: Optional[str] = None
             if USE_HAND_TRACKING:
                 pose_spell = getattr(run_vision_loop, "_last_pose_spell", None)
                 if pose_spell:
-                    spell_name = pose_spell
+                    basic_spell = pose_spell
                     setattr(run_vision_loop, "_last_pose_spell", None)
 
             # 3b) 트래젝토리 기반 주문 (LIGHT/DARK/CIRCLE/ZIGZAG)
             traj = traj_buffer.poll_last_closed()
-            if traj and spell_name is None:
-                basic_spell = analyzer.classify(traj)
-                if basic_spell not in ("UNKNOWN",):
-                    spell_name = combo_engine.push_basic_spell(
-                        basic_spell, cv2.getTickCount() / cv2.getTickFrequency()
-                    )
+            if traj and basic_spell is None:
+                classified = analyzer.classify(traj)
+                if classified != "UNKNOWN":
+                    basic_spell = classified
+
+            # 3c) 포즈/궤적 주문 모두 콤보 엔진을 통과시켜 상위 주문으로 승격
+            #     (전투 중이 아닐 때는 버퍼를 비워, 메뉴에서 취한 포즈가 전투 시작 직후
+            #      엉뚱한 콤보로 이어지지 않게 합니다.)
+            now_s = time.perf_counter()
+            spell_name: Optional[str] = None
+            combo_hint: Optional[Tuple[str, float]] = None
+            if game.is_playing:
+                if basic_spell:
+                    spell_name = combo_engine.push_basic_spell(basic_spell, now_s)
+                combo_hint = combo_engine.pending(now_s)
+            else:
+                combo_engine.clear()
 
             # 4) 게임 1프레임 진행(이벤트 처리 + 주문 적용 + 렌더)
             head_dir = getattr(run_vision_loop, "_last_head_dir", None) if USE_HAND_TRACKING else None
-            running = game.run_one_frame(spell_name, head_dir=head_dir)
+            running = game.run_one_frame(spell_name, head_dir=head_dir, combo_hint=combo_hint)
 
             # 5) 디버그 창 표시(HSV 경로만 별도 표시, Hand 경로는 run_vision_loop가 표시)
             if not USE_HAND_TRACKING and SHOW_DEBUG_WINDOWS and data is not None:
