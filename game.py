@@ -47,6 +47,41 @@ MESSAGE_DURATION_MS = 1500
 PROJECTILE_DURATION_MS = 450
 RING_DURATION_MS = 350
 
+# ── 보스 페이즈 / 예고(telegraph) ───────────────────────────────────
+PHASE2_HP_RATIO = 0.70
+PHASE3_HP_RATIO = 0.30
+
+PHASE_ATTACK_INTERVAL_MS = {1: BOSS_ATTACK_INTERVAL_MS, 2: 1500, 3: 1250}
+PHASE_ATTACK_KINDS = {
+    1: ("single",),
+    2: ("burst", "sweep", "single"),
+    3: ("aoe", "burst", "sweep"),
+}
+TELEGRAPH_MS = {"single": 500, "burst": 600, "sweep": 650, "aoe": 850}
+TELEGRAPH_LABELS = {
+    "single": "! 조준 중",
+    "burst": "!! 3연사 준비",
+    "sweep": "!! 좌우 스윕 - 가운데를 피하세요",
+    "aoe": "!!! 광역기 - SHIELD!",
+}
+BURST_SHOTS = 3
+BURST_STAGGER_MS = 130
+AOE_DMG = 13          # 이동으로 피할 수 없음 → 실드 필수
+SWEEP_SPREAD_PX = 260  # 좌우로 갈라지는 스윙 공격 폭
+
+# ── 원소 상성 ──────────────────────────────────────────────
+WEAKNESS_CYCLE = ("FIRE", "WATER", "EARTH", "WIND")
+RESIST_OF = {"FIRE": "WATER", "WATER": "FIRE", "EARTH": "WIND", "WIND": "EARTH"}
+WEAKNESS_MULTIPLIER = 2.0
+RESIST_MULTIPLIER = 0.5
+WEAKNESS_ROTATE_MS = 15000
+WEAK_HIT_STAGGER_MS = 700   # 약점 적중 시 보스 경직
+
+# ── 콤보 상태이상 ─────────────────────────────────────────
+BOSS_DOT_INTERVAL_MS = 500
+BOSS_SLOW_FACTOR = 0.5      # 둔화: 회피 확률 절반
+BOSS_BLIND_MISS_PROB = 0.5  # 실명: 보스 공격이 빗나갈 확률
+
 # Enhanced Element Colors with Neon Vibrancy
 FIRE_NEON = (255, 100, 50)  # Bright Fire Orange
 WATER_NEON = (60, 180, 255)  # Bright Water Blue
@@ -95,6 +130,46 @@ ELEMENT_PRESETS = {
 }
 
 
+# 콤보 주문 프리셋 (spell_combo.COMBO_RULES의 결과명과 1:1 대응)
+#   element : 상성 판정에 사용되는 속성
+#   dot     : (틱당 피해, 지속 ms)   slow/root/blind : 지속 ms
+#   pierce  : 보스 회피 무시     drain : 명중 시 플레이어 회복량   hits : 다단 히트 수
+COMBO_PRESETS = {
+    "STEAM": {
+        "color": (200, 220, 255), "style": "water", "element": "WATER",
+        "dmg": 16, "dot": (3, 3000), "desc": "화상 지속피해",
+    },
+    "MUD": {
+        "color": (150, 110, 70), "style": "earth", "element": "EARTH",
+        "dmg": 12, "root": 1500, "desc": "회피 봉쇄",
+    },
+    "FLAME_BALL": {
+        "color": (255, 80, 30), "style": "fire", "element": "FIRE",
+        "dmg": 26, "desc": "거대 화염구",
+    },
+    "ICE_SHARD": {
+        "color": (140, 220, 255), "style": "water", "element": "WATER",
+        "dmg": 16, "slow": 2500, "desc": "둔화",
+    },
+    "TORNADO": {
+        "color": (120, 255, 180), "style": "wind", "element": "WIND",
+        "dmg": 7, "hits": 4, "desc": "4단 히트",
+    },
+    "STONE_BULLET": {
+        "color": (200, 160, 100), "style": "earth", "element": "EARTH",
+        "dmg": 20, "pierce": True, "desc": "회피 무시",
+    },
+    "BLINDNESS": {
+        "color": (240, 255, 255), "style": "light", "element": "LIGHT",
+        "dmg": 6, "blind": 4000, "desc": "보스 명중률 ↓",
+    },
+    "CURSE_SHOCK": {
+        "color": (160, 80, 255), "style": "dark", "element": "DARK",
+        "dmg": 18, "drain": 8, "desc": "HP 흡수",
+    },
+}
+
+
 # Magic Circle Colors - Enhanced Neon Glow
 MAGIC_CIRCLE_COLORS = {
     "FIRE":      (255, 100,  50),  # Bright Fire Orange
@@ -121,6 +196,7 @@ class SpellResult:
     name: str
     applied: bool
     reason: str = ""
+    element: str = ""
 
 
 class SpellGame:
@@ -162,6 +238,22 @@ class SpellGame:
 
         # 보스 공격 주기 타이머
         self._boss_attack_timer = 0
+
+        # 보스 페이즈 / 예고 / 상태이상
+        self._boss_phase = 1
+        self._telegraph: Optional[dict] = None
+        self._boss_stagger_left = 0
+        self._boss_root_left = 0
+        self._boss_slow_left = 0
+        self._boss_blind_left = 0
+        self._boss_dots: List[dict] = []
+
+        # 원소 상성(보스 약점)
+        self.boss_weakness = random.choice(WEAKNESS_CYCLE)
+        self._weakness_timer = 0
+
+        # 콤보 힌트(입력 대기 중인 기본 주문)
+        self._combo_hint: Optional[Tuple[str, float]] = None
 
         # UI 메시지
         self.message_text = ""
@@ -218,7 +310,17 @@ class SpellGame:
 
     # ── 퍼블릭 API ──────────────────────────────────────────────────────────
 
-    def run_one_frame(self, spell_name: Optional[str], head_dir: Optional[str] = None) -> bool:
+    @property
+    def is_playing(self) -> bool:
+        """전투(playing) 상태 여부 — 외부 입력 파이프라인의 게이트로 사용합니다."""
+        return self._state == "playing"
+
+    def run_one_frame(
+        self,
+        spell_name: Optional[str],
+        head_dir: Optional[str] = None,
+        combo_hint: Optional[Tuple[str, float]] = None,
+    ) -> bool:
         """한 프레임을 처리합니다.
 
         - Pygame 이벤트 처리(종료 등)
@@ -229,6 +331,8 @@ class SpellGame:
             계속 실행하려면 True, 창 종료/ESC 시 False.
         """
         _prev_state = self._state
+        # 콤보 대기 상태(주문명, 남은 시간 비율)는 렌더러 HUD로 그대로 전달됩니다.
+        self._combo_hint = combo_hint
 
         # 이벤트 처리
         for event in pygame.event.get():
@@ -438,9 +542,10 @@ class SpellGame:
         if spell_name:
             _result = self.apply_spell(spell_name)
             if _result.applied:
-                self._audio.play_spell_sfx(_result.name)
+                self._audio.play_spell_sfx(_result.element or _result.name)
 
-        # 나머지 업데이트
+        # 나머지 업데이트 (순서 중요: 상태이상/페이즈 → AI 판단 → 투사체 판정)
+        self._update_boss_status(dt)
         self._update_boss_ai(dt)
         self._update_effects(dt)
 
@@ -476,126 +581,122 @@ class SpellGame:
     def apply_spell(self, spell_name: str) -> SpellResult:
         label = spell_name.upper()
 
+        # 궤적 분류 결과(LINE/CIRCLE/ZIGZAG)를 주문 이름으로 정규화
         if label in ("LINE", "FIRE"):
-            p = ELEMENT_PRESETS["FIRE"]
-            self._spawn_player_projectile(
-                element="FIRE",
-                color=p["color"],
-                dmg=p["dmg"],
-                dur_ms=p["dur"],
-                style=p["style"],
-            )
-            self._spawn_cast_effect(p["color"], p["style"])
-            self._spawn_magic_circle("FIRE")
-            # 파티클 효과 추가
-            wand_x, wand_y = int(SCREEN_W * 0.61), int(SCREEN_H * 0.71)
-            self._fp.add_particles(wand_x, wand_y, 15, p["color"], "spark")
-            self._fp.add_camera_shake(3.0, 150)
-            self._toast("FIRE!", YELLOW)
-            return SpellResult("FIRE", True)
+            label = "FIRE"
 
-        if label == "WATER":
-            p = ELEMENT_PRESETS["WATER"]
-            self._spawn_player_projectile(
-                element="WATER",
-                color=p["color"],
-                dmg=p["dmg"],
-                dur_ms=p["dur"],
-                style=p["style"],
-            )
-            self._spawn_cast_effect(p["color"], p["style"])
-            self._spawn_magic_circle("WATER")
-            wand_x, wand_y = int(SCREEN_W * 0.61), int(SCREEN_H * 0.71)
-            self._fp.add_particles(wand_x, wand_y, 12, p["color"], "glow")
-            self._fp.add_camera_shake(2.5, 130)
-            self._toast("WATER!", BLUE)
-            return SpellResult("WATER", True)
-
-        if label == "WIND":
-            p = ELEMENT_PRESETS["WIND"]
-            self._spawn_player_projectile(
-                element="WIND",
-                color=p["color"],
-                dmg=p["dmg"],
-                dur_ms=p["dur"],
-                style=p["style"],
-            )
-            self._spawn_cast_effect(p["color"], p["style"])
-            self._spawn_magic_circle("WIND")
-            wand_x, wand_y = int(SCREEN_W * 0.61), int(SCREEN_H * 0.71)
-            self._fp.add_particles(wand_x, wand_y, 20, p["color"], "spark")
-            self._fp.add_camera_shake(2.0, 120)
-            self._toast("WIND!", GREEN)
-            return SpellResult("WIND", True)
-
-        if label == "EARTH":
-            p = ELEMENT_PRESETS["EARTH"]
-            self._spawn_player_projectile(
-                element="EARTH",
-                color=p["color"],
-                dmg=p["dmg"],
-                dur_ms=p["dur"],
-                style=p["style"],
-            )
-            self._spawn_cast_effect(p["color"], p["style"])
-            self._spawn_magic_circle("EARTH")
-            wand_x, wand_y = int(SCREEN_W * 0.61), int(SCREEN_H * 0.71)
-            self._fp.add_particles(wand_x, wand_y, 10, p["color"], "spark")
-            self._fp.add_camera_shake(4.0, 180)
-            self._toast("EARTH!", GREY)
-            return SpellResult("EARTH", True)
-
-        if label == "DARK":
-            p = ELEMENT_PRESETS["DARK"]
-            self._spawn_player_projectile(
-                element="DARK",
-                color=p["color"],
-                dmg=p["dmg"],
-                dur_ms=p["dur"],
-                style=p["style"],
-            )
-            self._spawn_cast_effect(p["color"], p["style"])
-            self._spawn_magic_circle("DARK")
-            wand_x, wand_y = int(SCREEN_W * 0.61), int(SCREEN_H * 0.71)
-            self._fp.add_particles(wand_x, wand_y, 18, p["color"], "glow")
-            self._fp.add_camera_shake(3.5, 160)
-            self._toast("DARK!", PURPLE)
-            return SpellResult("DARK", True)
-
-        if label in ("CIRCLE", "LIGHT"):
-            self.shield_time_left = SHIELD_DURATION_MS
-            self._spawn_shield_ring()
-            self._spawn_cast_effect(CYAN, "light")
-            self._spawn_magic_circle("LIGHT")
-            wand_x, wand_y = int(SCREEN_W * 0.61), int(SCREEN_H * 0.71)
-            self._fp.add_particles(wand_x, wand_y, 25, CYAN, "glow")
-            self._fp.add_camera_shake(2.0, 140)
-            self._toast(f"SHIELD ({SHIELD_DURATION_MS // 1000}s)", CYAN)
-            return SpellResult("LIGHT", True)
+        if label in ("CIRCLE", "LIGHT_SHIELD", "SHIELD"):
+            return self._cast_shield()
 
         if label in ("ZIGZAG", "LIGHTNING"):
-            if self.lightning_cd_left <= 0:
-                p = ELEMENT_PRESETS["LIGHTNING"]
-                self.lightning_cd_left = LIGHTNING_COOLDOWN_MS
-                self._spawn_player_projectile(
-                    element="LIGHTNING",
-                    color=p["color"],
-                    dmg=p["dmg"],
-                    dur_ms=p["dur"],
-                    style=p["style"],
-                )
-                self._spawn_cast_effect(p["color"], p["style"])
-                self._spawn_magic_circle("LIGHTNING")
-                wand_x, wand_y = int(SCREEN_W * 0.61), int(SCREEN_H * 0.71)
-                self._fp.add_particles(wand_x, wand_y, 30, p["color"], "spark")
-                self._fp.add_camera_shake(5.0, 200)
-                self._toast("LIGHTNING!", BLUE)
-                return SpellResult("LIGHTNING", True)
-            self._toast("LIGHTNING (cooldown)", GREY)
-            return SpellResult("LIGHTNING", False, "cooldown")
+            return self._cast_lightning()
+
+        # 콤보 엔진이 승격시킨 상위 주문 (STEAM/TORNADO/...)
+        if label in COMBO_PRESETS:
+            return self._cast_combo(label)
+
+        if label in ("LIGHT",):
+            return self._cast_shield()
+
+        if label in ELEMENT_PRESETS:
+            return self._cast_element(label)
 
         self._toast(f"UNKNOWN: {spell_name}", GREY)
         return SpellResult("UNKNOWN", False, "unrecognized")
+
+    # ── 시전 헬퍼 ───────────────────────────────────────────────────────────
+
+    _CAST_FX = {
+        "FIRE":  (15, "spark", 3.0, 150, YELLOW),
+        "WATER": (12, "glow",  2.5, 130, BLUE),
+        "WIND":  (20, "spark", 2.0, 120, GREEN),
+        "EARTH": (10, "spark", 4.0, 180, GREY),
+        "DARK":  (18, "glow",  3.5, 160, PURPLE),
+    }
+
+    def _cast_element(self, element: str) -> SpellResult:
+        p = ELEMENT_PRESETS[element]
+        count, pstyle, shake, shake_ms, toast_col = self._CAST_FX.get(
+            element, (14, "spark", 3.0, 150, WHITE)
+        )
+        self._spawn_player_projectile(
+            element=element,
+            color=p["color"],
+            dmg=p["dmg"],
+            dur_ms=p["dur"],
+            style=p["style"],
+        )
+        self._spawn_cast_effect(p["color"], p["style"])
+        self._spawn_magic_circle(element)
+        self._wand_particles(count, p["color"], pstyle)
+        self._fp.add_camera_shake(shake, shake_ms)
+        self._toast(f"{element}!", toast_col)
+        return SpellResult(element, True, element=element)
+
+    def _cast_combo(self, name: str) -> SpellResult:
+        """콤보 주문 시전 — 프리셋의 상태이상을 투사체 payload에 실어 명중 시점에 적용합니다."""
+        p = COMBO_PRESETS[name]
+        hits = int(p.get("hits", 1))
+        base_dur = PROJECTILE_DURATION_MS + 40
+        # 다단 히트는 도착 시간을 어긋나게 해 연타처럼 보이게 함
+        for i in range(hits):
+            self._spawn_player_projectile(
+                element=p["element"],
+                color=p["color"],
+                dmg=p["dmg"],
+                dur_ms=base_dur + i * 120,
+                style=p["style"],
+                payload={
+                    "combo": name,
+                    "pierce": bool(p.get("pierce", False)),
+                    "dot": p.get("dot"),
+                    "slow": p.get("slow", 0),
+                    "root": p.get("root", 0),
+                    "blind": p.get("blind", 0),
+                    "drain": p.get("drain", 0),
+                },
+            )
+        self._spawn_cast_effect(p["color"], p["style"])
+        self._spawn_magic_circle(p["element"])
+        self._wand_particles(28, p["color"], "glow")
+        self._fp.add_camera_shake(6.0, 220)
+        self._toast(f"COMBO {name}! ({p['desc']})", GOLD)
+        return SpellResult(name, True, element=p["element"])
+
+    def _cast_shield(self) -> SpellResult:
+        self.shield_time_left = SHIELD_DURATION_MS
+        self._spawn_shield_ring()
+        self._spawn_cast_effect(CYAN, "light")
+        self._spawn_magic_circle("LIGHT")
+        self._wand_particles(25, CYAN, "glow")
+        self._fp.add_camera_shake(2.0, 140)
+        self._toast(f"SHIELD ({SHIELD_DURATION_MS // 1000}s)", CYAN)
+        return SpellResult("LIGHT", True, element="LIGHT")
+
+    def _cast_lightning(self) -> SpellResult:
+        if self.lightning_cd_left > 0:
+            self._toast("LIGHTNING (cooldown)", GREY)
+            return SpellResult("LIGHTNING", False, "cooldown")
+
+        p = ELEMENT_PRESETS["LIGHTNING"]
+        self.lightning_cd_left = LIGHTNING_COOLDOWN_MS
+        self._spawn_player_projectile(
+            element="LIGHTNING",
+            color=p["color"],
+            dmg=p["dmg"],
+            dur_ms=p["dur"],
+            style=p["style"],
+        )
+        self._spawn_cast_effect(p["color"], p["style"])
+        self._spawn_magic_circle("LIGHTNING")
+        self._wand_particles(30, p["color"], "spark")
+        self._fp.add_camera_shake(5.0, 200)
+        self._toast("LIGHTNING!", BLUE)
+        return SpellResult("LIGHTNING", True, element="LIGHTNING")
+
+    def _wand_particles(self, count: int, color: Tuple[int, int, int], style: str) -> None:
+        wand_x, wand_y = int(SCREEN_W * 0.61), int(SCREEN_H * 0.71)
+        self._fp.add_particles(wand_x, wand_y, count, color, style)
 
     def close(self) -> None:
         """게임을 종료하고 Pygame을 정리합니다."""
@@ -623,12 +724,115 @@ class SpellGame:
         if self.message_time_left > 0:
             self.message_time_left = max(0, self.message_time_left - dt_ms)
 
+    # ── 원소 상성 ───────────────────────────────────────────────────────────
+
+    def element_multiplier(self, element: Optional[str]) -> float:
+        """공격 원소가 보스 약점이면 2배, 저항 원소면 0.5배."""
+        if not element:
+            return 1.0
+        if element == self.boss_weakness:
+            return WEAKNESS_MULTIPLIER
+        if element == RESIST_OF.get(self.boss_weakness):
+            return RESIST_MULTIPLIER
+        return 1.0
+
+    def _rotate_weakness(self) -> None:
+        choices = [e for e in WEAKNESS_CYCLE if e != self.boss_weakness]
+        self.boss_weakness = random.choice(choices)
+        self._weakness_timer = 0
+        self._toast(f"WEAKNESS: {self.boss_weakness}", GOLD, keep_if_longer=True)
+
+    # ── 보스 상태이상 / 페이즈 ──────────────────────────────────────────────
+
+    def _compute_phase(self) -> int:
+        ratio = self.boss_hp / float(BOSS_MAX_HP)
+        if ratio > PHASE2_HP_RATIO:
+            return 1
+        if ratio > PHASE3_HP_RATIO:
+            return 2
+        return 3
+
+    def _update_boss_status(self, dt_ms: int) -> None:
+        self._boss_stagger_left = max(0, self._boss_stagger_left - dt_ms)
+        self._boss_root_left = max(0, self._boss_root_left - dt_ms)
+        self._boss_slow_left = max(0, self._boss_slow_left - dt_ms)
+        self._boss_blind_left = max(0, self._boss_blind_left - dt_ms)
+
+        # 지속 피해(화상 등)
+        alive: List[dict] = []
+        for dot in self._boss_dots:
+            dot["left"] -= dt_ms
+            dot["acc"] += dt_ms
+            while dot["acc"] >= BOSS_DOT_INTERVAL_MS:
+                dot["acc"] -= BOSS_DOT_INTERVAL_MS
+                self._deal_boss_damage(dot["dmg"])
+            if dot["left"] > 0:
+                alive.append(dot)
+        self._boss_dots = alive
+
+        # 약점 원소 로테이션
+        self._weakness_timer += dt_ms
+        if self._weakness_timer >= WEAKNESS_ROTATE_MS:
+            self._rotate_weakness()
+
+        # 페이즈 전환: HP 구간이 바뀌면 예고를 취소하고 약점 원소도 새로 뽑음
+        phase = self._compute_phase()
+        if phase != self._boss_phase:
+            self._boss_phase = phase
+            self._telegraph = None
+            self._boss_attack_timer = 0
+            self._fp.add_camera_shake(7.0, 400)
+            self._toast(f"PHASE {phase}!", RED)
+            self._rotate_weakness()
+
     def _update_boss_ai(self, dt_ms: int) -> None:
-        # 매우 단순한 보스: 주기적으로 투사체 발사(피해는 명중 시점에 적용)
+        """예고(telegraph) → 발사 2단계로 동작하는 페이즈별 보스 AI."""
+        if self._boss_stagger_left > 0:
+            return
+
+        if self._telegraph is not None:
+            self._telegraph["left"] -= dt_ms
+            if self._telegraph["left"] <= 0:
+                kind = self._telegraph["kind"]
+                self._telegraph = None
+                self._fire_boss_attack(kind)
+            return
+
+        # 페이즈가 올라갈수록 공격 주기가 짧아짐
         self._boss_attack_timer += dt_ms
-        while self._boss_attack_timer >= BOSS_ATTACK_INTERVAL_MS:
-            self._boss_attack_timer -= BOSS_ATTACK_INTERVAL_MS
-            self._spawn_boss_projectile(dmg=BOSS_DMG)
+        interval = PHASE_ATTACK_INTERVAL_MS[self._boss_phase]
+        if self._boss_attack_timer >= interval:
+            self._boss_attack_timer = 0
+            kind = random.choice(PHASE_ATTACK_KINDS[self._boss_phase])
+            total = TELEGRAPH_MS[kind]
+            self._telegraph = {"kind": kind, "left": total, "total": total}
+            self._toast(TELEGRAPH_LABELS[kind], ORANGE, keep_if_longer=True)
+
+    def _fire_boss_attack(self, kind: str) -> None:
+        if kind == "burst":
+            for i in range(BURST_SHOTS):
+                self._spawn_boss_projectile(BOSS_DMG, delay_ms=i * BURST_STAGGER_MS)
+        elif kind == "sweep":
+            # 현재 위치와 한쪽 방향을 함께 노려, 반대쪽으로 피하도록 강제
+            side = random.choice((-1, 1))
+            px = self.player_pos[0]
+            self._spawn_boss_projectile(BOSS_DMG, target_x=px)
+            self._spawn_boss_projectile(
+                BOSS_DMG, target_x=px + side * SWEEP_SPREAD_PX, delay_ms=BURST_STAGGER_MS
+            )
+        elif kind == "aoe":
+            self._spawn_boss_projectile(AOE_DMG, aoe=True)
+            self._fp.add_camera_shake(6.0, 300)
+        else:
+            self._spawn_boss_projectile(BOSS_DMG)
+
+    @property
+    def telegraph_progress(self) -> Optional[float]:
+        """예고 진행률(0~1). 예고 중이 아니면 None."""
+        if self._telegraph is None:
+            return None
+        total = max(1, self._telegraph["total"])
+        return 1.0 - max(0, self._telegraph["left"]) / float(total)
 
     def _toast(self, text: str, color: Tuple[int, int, int], keep_if_longer: bool = False) -> None:
         # 간단한 메시지 시스템: 잠시 상단 중앙에 표시
@@ -650,6 +854,15 @@ class SpellGame:
         self.shield_time_left  = 0
         self.lightning_cd_left = 0
         self._boss_attack_timer = 0
+        self._boss_phase       = 1
+        self._telegraph        = None
+        self._boss_stagger_left = 0
+        self._boss_root_left   = 0
+        self._boss_slow_left   = 0
+        self._boss_blind_left  = 0
+        self._boss_dots        = []
+        self.boss_weakness     = random.choice(WEAKNESS_CYCLE)
+        self._weakness_timer   = 0
         self.message_text      = ""
         self.message_time_left = 0
         self._effects          = []
@@ -692,6 +905,11 @@ class SpellGame:
             difficulty=self.difficulty,
             player_offset_x=player_offset_x,
             dt_ms=dt_ms,
+            boss_weakness=self.boss_weakness,
+            boss_phase=self._boss_phase,
+            telegraph_progress=self.telegraph_progress,
+            telegraph_kind=self._telegraph["kind"] if self._telegraph else None,
+            combo_hint=self._combo_hint,
         )
 
     # 메뉴 렌더
@@ -723,6 +941,7 @@ class SpellGame:
         dmg: int,
         dur_ms: int,
         style: str,
+        payload: Optional[dict] = None,
     ) -> None:
         # 시전 순간의 플레이어 오프셋을 저장 → 렌더러가 시전 위치에서 투사체를 출발시킴
         cast_offset_x = (self._player_fx - SCREEN_W / 2) / (SCREEN_W / 2)
@@ -742,23 +961,35 @@ class SpellGame:
             "dodge_checked": False,
             "dodged": False,
             "cast_offset_x": cast_offset_x,
+            **(payload or {}),
         })
 
-    def _spawn_boss_projectile(self, dmg: int) -> None:
+    def _spawn_boss_projectile(
+        self,
+        dmg: int,
+        delay_ms: int = 0,
+        target_x: Optional[int] = None,
+        aoe: bool = False,
+    ) -> None:
         self._audio.play_boss_attack()
+        end_x = self.player_pos[0] if target_x is None else int(target_x)
+        # 실명 상태: 일정 확률로 조준이 크게 빗나감
+        if self._boss_blind_left > 0 and random.random() < BOSS_BLIND_MISS_PROB:
+            end_x += random.choice((-1, 1)) * 220
         self._effects.append({
             "type": "proj",
             "element": "BOSS",
             "style": "boss",
             "color": RED,
             "start": self.boss_pos,
-            "end": self.player_pos,
-            "elapsed": 0,
+            "end": (end_x, self.player_pos[1]),
+            "elapsed": -int(delay_ms),
             "dur": PROJECTILE_DURATION_MS,
             "r": 8,
             "origin": "boss",
             "target": "player",
             "dmg": int(dmg),
+            "aoe": aoe,
         })
 
     def _spawn_cast_effect(self, color: Tuple[int, int, int], style: str) -> None:
@@ -816,18 +1047,23 @@ class SpellGame:
             if e["type"] == "proj":
                 t = max(0.0, min(1.0, e["elapsed"] / float(e["dur"])))
 
+                # 비행 후반부(60~90%)에 보스 회피를 1회만 판정
                 if e.get("origin") == "player" and not e.get("dodge_checked", False) and 0.6 <= t <= 0.9:
-                    prob = getattr(self, "_boss_dodge_prob", 0.4)
-                    if random.random() < prob:
-                        direction = -1 if random.random() < 0.5 else 1
-                        dash_px = max(90, int(self.boss_r * 2))
-                        new_x = max(
-                            self.boss_r + 30,
-                            min(SCREEN_W - (self.boss_r + 30), self.boss_pos[0] + direction * dash_px)
-                        )
-                        self.boss_pos = (new_x, self.boss_pos[1])
-                        e["dodged"] = True
-                        self._toast("BOSS DODGE!", GREY, keep_if_longer=True)
+                    # 관통(STONE_BULLET) 또는 속박(MUD) 상태면 회피 자체가 불가
+                    if not e.get("pierce", False) and self._boss_root_left <= 0:
+                        prob = self._boss_dodge_prob
+                        if self._boss_slow_left > 0:
+                            prob *= BOSS_SLOW_FACTOR
+                        if random.random() < prob:
+                            direction = -1 if random.random() < 0.5 else 1
+                            dash_px = max(90, int(self.boss_r * 2))
+                            new_x = max(
+                                self.boss_r + 30,
+                                min(SCREEN_W - (self.boss_r + 30), self.boss_pos[0] + direction * dash_px)
+                            )
+                            self.boss_pos = (new_x, self.boss_pos[1])
+                            e["dodged"] = True
+                            self._toast("BOSS DODGE!", GREY, keep_if_longer=True)
                     e["dodge_checked"] = True
 
                 if e["elapsed"] >= e["dur"]:
@@ -840,16 +1076,15 @@ class SpellGame:
                         tx, ty = self.boss_pos
                         thr = self.boss_r + e.get("r", 8)
                         if math.hypot(hit_x - tx, hit_y - ty) <= thr:
-                            self._deal_boss_damage(e.get("dmg", 0))
-                            self._spawn_impact_effect(e["color"], e.get("style", "fire"), True)
-                            self._toast(f"HIT -{e.get('dmg', 0)} HP", YELLOW)
+                            self._resolve_boss_hit(e)
                         else:
                             self._spawn_impact_effect(e["color"], e.get("style", "fire"), False)
                             self._toast("MISS", GREY, keep_if_longer=True)
                     else:
                         tx, ty = self.player_pos
                         thr = self.player_r + e.get("r", 8)
-                        if math.hypot(hit_x - tx, hit_y - ty) <= thr:
+                        # 광역기(aoe)는 위치와 무관하게 명중 → 실드로만 경감 가능
+                        if e.get("aoe", False) or math.hypot(hit_x - tx, hit_y - ty) <= thr:
                             self._deal_player_damage(e.get("dmg", 0))
                             self._spawn_impact_effect(e["color"], "boss", True)
                         else:
@@ -860,6 +1095,37 @@ class SpellGame:
                 alive.append(e)
 
         self._effects = alive
+
+    def _resolve_boss_hit(self, e: dict) -> None:
+        """보스 명중 처리: 원소 상성 배율 + 콤보 상태이상 적용."""
+        # 최종 피해 = 기본 피해 x 상성 배율 (약점 2배 / 상극 0.5배), 최소 1
+        mult = self.element_multiplier(e.get("element"))
+        dmg = max(1, int(round(e.get("dmg", 0) * mult)))
+        self._deal_boss_damage(dmg)
+        self._spawn_impact_effect(e["color"], e.get("style", "fire"), True)
+
+        dot = e.get("dot")
+        if dot:
+            dot_dmg, dot_ms = dot
+            self._boss_dots.append({"dmg": int(dot_dmg), "left": int(dot_ms), "acc": 0})
+        if e.get("slow", 0):
+            self._boss_slow_left = max(self._boss_slow_left, int(e["slow"]))
+        if e.get("root", 0):
+            self._boss_root_left = max(self._boss_root_left, int(e["root"]))
+        if e.get("blind", 0):
+            self._boss_blind_left = max(self._boss_blind_left, int(e["blind"]))
+        if e.get("drain", 0):
+            healed = min(PLAYER_MAX_HP - self.player_hp, int(e["drain"]))
+            self.player_hp += healed
+
+        if mult >= WEAKNESS_MULTIPLIER:
+            self._boss_stagger_left = WEAK_HIT_STAGGER_MS
+            self._fp.add_camera_shake(6.0, 220)
+            self._toast(f"WEAK POINT!  -{dmg} HP", GOLD)
+        elif mult <= RESIST_MULTIPLIER:
+            self._toast(f"RESISTED  -{dmg} HP", GREY)
+        else:
+            self._toast(f"HIT -{dmg} HP", YELLOW)
 
     def _render_effects(self) -> None:
         for e in self._effects:
