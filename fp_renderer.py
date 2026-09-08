@@ -1529,6 +1529,19 @@ class FPRenderer:
                 pygame.draw.circle(self.screen, col, (cx_w, cy_w), r, e["w"])
                 pygame.draw.circle(self.screen, col, (cx_w, cy_w), max(8, r - 10), 1)
 
+            elif etype == "telegraph":
+                # 보스 시전 경고: 보스 중심에서 수축하는 붉은 링 + 점멸
+                t = max(0.0, min(1.0, e["elapsed"] / float(e["dur"])))
+                cx, cy = boss_center
+                r = int(96 - 66 * t)
+                pulse = 0.55 + 0.45 * abs(math.sin(self._tick * 0.6))
+                col = (int(255 * pulse), int(70 * pulse), int(70 * pulse))
+                try:
+                    pygame.draw.circle(self.screen, col, (cx, cy), max(6, r), 3)
+                    pygame.draw.circle(self.screen, col, (cx, cy), max(3, r // 2), 1)
+                except Exception:
+                    pass
+
     # ── Shield vignette ────────────────────────────────────────────────────────
 
     def _draw_shield_vignette(self, time_left: int) -> None:

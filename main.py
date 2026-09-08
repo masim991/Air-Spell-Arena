@@ -53,13 +53,10 @@ def _run_hand_tracking(game: SpellGame, combo_engine: SpellComboEngine) -> None:
                 log.error("비전 파이프라인이 중단되었습니다 — 게임을 종료합니다.")
                 break
 
-            # 1) 주문 이벤트 소비: 포즈 우선, 없으면 궤적(콤보 경유)
+            # 1) 주문 이벤트 소비: 포즈/궤적 모두 콤보 엔진 경유(최신 결과 채택)
             spell_name: Optional[str] = None
-            for kind, name in pipeline.drain_spells():
-                if kind == "pose":
-                    spell_name = name
-                elif kind == "traj" and spell_name is None:
-                    spell_name = combo_engine.push_basic_spell(name, _now_s())
+            for _kind, name in pipeline.drain_spells():
+                spell_name = combo_engine.push_basic_spell(name, _now_s())
 
             # 2) 최신 비전 결과 소비(연속 신호: head_dir, 디버그 프레임)
             res = pipeline.poll_result()

@@ -64,8 +64,8 @@ class GestureConfig:
     resample_points: int = 32
     min_length_px: float = 45.0
     circle_close_ratio: float = 0.30
-    zigzag_min_turns: int = 4
-    sharp_turn_deg: float = 60.0
+    zigzag_min_turns: int = 3       # 라이트닝(지그재그) 인식 문턱 완화 (4→3)
+    sharp_turn_deg: float = 55.0    # 급턴 판정 각도도 소폭 완화
     horizontal_ratio: float = 0.65   # LIGHT/DARK 수평 우세 비율
 
     # 포즈 기반 (FIRE/WATER/EARTH/WIND)
