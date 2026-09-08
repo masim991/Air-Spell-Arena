@@ -151,6 +151,11 @@ class GestureAnalyzer:
         if len(trajectory) < 2:
             return "UNKNOWN"
 
+        # 리샘플 전에 원본 경로 길이로 선(先)필터 — 너무 짧으면 바로 탈락.
+        # (리샘플러가 극단적으로 짧은 입력에서 진행하지 못하는 경우 방지)
+        if _path_length(trajectory) < self._cfg.min_length_px:
+            return "UNKNOWN"
+
         pts    = _resample_polyline(trajectory, self._cfg.resample_points)
         length = _path_length(pts)
         if length < self._cfg.min_length_px:
@@ -202,25 +207,24 @@ def _resample_polyline(pts: Trajectory, n: int) -> Trajectory:
 
     acc = 0.0
     i = 1
-    prev = pts[0]
-    while i < len(pts):
+    # prev 를 float 로 유지 → int 절삭으로 인해 진행이 멈추는 무한 루프 방지.
+    prev_x, prev_y = float(pts[0][0]), float(pts[0][1])
+    while i < len(pts) and len(out) < n:
         cur = pts[i]
-        seg = _dist(prev, cur)
-        if seg == 0:
+        seg = math.hypot(cur[0] - prev_x, cur[1] - prev_y)
+        if seg == 0.0:
             i += 1
             continue
 
         if acc + seg >= step:
             t = (step - acc) / seg
-            nx = prev[0] + (cur[0] - prev[0]) * t
-            ny = prev[1] + (cur[1] - prev[1]) * t
-            newp = (int(nx), int(ny))
-            out.append(newp)
-            prev = newp
+            prev_x += (cur[0] - prev_x) * t
+            prev_y += (cur[1] - prev_y) * t
+            out.append((int(prev_x), int(prev_y)))
             acc = 0.0
         else:
             acc += seg
-            prev = cur
+            prev_x, prev_y = float(cur[0]), float(cur[1])
             i += 1
 
     while len(out) < n:

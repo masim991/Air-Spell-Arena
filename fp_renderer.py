@@ -443,7 +443,7 @@ class FPRenderer:
             clickables.append((toggle_rect, "toggle_custom", None))
 
         # ── 슬롯 탭 (2줄 × 4 = 8개) ──────────────────────────────────────
-        mx, my = 40, 40    # margin
+        mx = 40    # 좌우 여백
         tab_gap = 8
         tab_w   = (W - mx * 2 - tab_gap * 3) // 4   # ≈199
         tab_h   = 32
@@ -1489,7 +1489,6 @@ class FPRenderer:
 
     def _draw_effects(self, effects: List[dict], player_offset_x: float = 0.0) -> None:
         W, H = self.W, self.H
-        wand_shift  = int(player_offset_x * W * self.WAND_SWAY_GAIN)
         boss_shift  = int(-player_offset_x * W * 0.03)
         wand_pt     = self.wand_tip(player_offset_x)
         boss_center = (W // 2 + boss_shift, H // 2 - 28)

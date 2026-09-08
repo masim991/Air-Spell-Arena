@@ -72,6 +72,23 @@ python main.py
 - 상반신과 한쪽 손이 프레임에 들어오는 거리(약 0.6~1.2 m).
 - 균일한 조명(역광 피하기). 손과 배경 대비가 낮으면 인식률이 떨어집니다.
 
+## 개발 / 테스트
+
+```bash
+pip install -r requirements-dev.txt
+ruff check .          # 린트 (E9 + pyflakes)
+pytest                # 헤드리스 테스트 (SDL dummy 자동 설정)
+```
+
+CI(`.github/workflows/ci.yml`)가 push/PR마다 ruff + pytest를 실행합니다.
+
+## 패키징
+
+```bash
+pip install pyinstaller
+pyinstaller airspellarena.spec     # → dist/AirSpellArena(.exe), sounds/ 동봉
+```
+
 ## 모듈 구조
 | 파일 | 역할 |
 |------|------|

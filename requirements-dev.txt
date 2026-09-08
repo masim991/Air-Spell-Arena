@@ -1,0 +1,4 @@
+# 개발/CI 전용 의존성 (런타임은 requirements.txt)
+-r requirements.txt
+pytest==9.1.1
+ruff==0.16.6

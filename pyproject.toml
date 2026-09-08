@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "air-spell-arena"
+version = "0.4.0"
+description = "웹캠 모션 캡처로 마법을 시전해 보스와 싸우는 파이썬 게임"
+readme = "README.md"
+requires-python = ">=3.9,<3.13"
+dependencies = [
+    "opencv-python==4.13.0.92",
+    "mediapipe==0.10.14",
+    "pygame==2.6.1",
+    "numpy==2.2.5",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff>=0.6"]
+
+[project.scripts]
+air-spell-arena = "main:run"
+
+[tool.setuptools]
+py-modules = [
+    "main", "game", "fp_renderer", "vision_loop", "head_tracker",
+    "gesture", "trajectory", "spell_combo", "audio_manager", "air_canvas",
+]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+
+[tool.ruff.lint]
+# 고신호 정확성 규칙만 (구문 오류 · 미정의/미사용 이름 · f-string 버그 등).
+# 스타일/타이핑 현대화(UP·I 등)는 점진 도입 예정.
+select = ["E9", "F"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
