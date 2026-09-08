@@ -9,7 +9,6 @@ main.py – OpenCV(air_canvas) + TrajectoryBuffer + GestureAnalyzer + Pygame(Spe
 
 디버그:
 - show_debug_windows = True 이면 Tracking/Paint/Mask를 함께 표시(나중에 False로 끌 수 있음)
-- 필요 시 process_every_nth_frame 조절로 카메라 처리 주기를 낮출 수 있음(기본 1)
 """
 
 from typing import Optional
@@ -21,14 +20,13 @@ from gesture import GestureAnalyzer
 from game import SpellGame
 from spell_combo import SpellComboEngine
 from trajectory import TrajectoryBuffer, TrajectoryConfig
-from vision_loop import run_vision_loop
+from vision_loop import run_vision_loop, cleanup_vision_loop
 
 
 # ── 실행 옵션 ────────────────────────────────────────────────────────────────
-SHOW_DEBUG_WINDOWS = True
-PROCESS_EVERY_NTH_FRAME = 1  # 성능이 낮으면 2~3 이상으로 올려보세요.
+SHOW_DEBUG_WINDOWS = True   # 웹캠 화면 표시 (Tracking 창만)
 CAMERA_INDEX = 0
-SHOW_TRACKBARS = True        # 추후 False로 끄면 트랙바 없이 고정 HSV로 동작
+SHOW_TRACKBARS = False       # 메모리 최적화: 트랙바 비활성화
 USE_HAND_TRACKING = True     # True면 MediaPipe 기반 손가락 추적 경로 사용
 
 
@@ -47,7 +45,6 @@ def run() -> int:
     else:
         canvas = AirCanvas(camera_index=CAMERA_INDEX, show_trackbars=SHOW_TRACKBARS)
 
-    frame_idx = 0
     running = True
 
     try:
@@ -97,11 +94,6 @@ def run() -> int:
                 cv2.imshow("Paint", data.paint)
                 cv2.imshow("Mask", data.mask)
 
-            # 6) FPS/성능 조절(필요 시 N프레임마다만 처리하도록 확장 가능)
-            frame_idx += 1
-            # if frame_idx % PROCESS_EVERY_NTH_FRAME != 0:
-            #     pass  # 여기서 샘플링 전략을 바꾸고 싶다면 적용
-
     finally:
         game.close()
         if cap is not None:
@@ -109,6 +101,9 @@ def run() -> int:
             cv2.destroyAllWindows()
         if canvas is not None:
             canvas.release()
+        # MediaPipe 및 vision_loop 리소스 정리
+        if USE_HAND_TRACKING:
+            cleanup_vision_loop()
 
     return 0
 

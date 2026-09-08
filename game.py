@@ -704,17 +704,6 @@ class SpellGame:
             difficulty=self.difficulty,
         )
 
-    def _draw_hp_bar(self, rect: Tuple[int, int, int, int], hp: int, hp_max: int, color: Tuple[int, int, int]) -> None:
-        x, y, w, h = rect
-        pygame.draw.rect(self.screen, GREY, (x, y, w, h), border_radius=4)
-        ratio = max(0.0, min(1.0, hp / float(hp_max)))
-        pygame.draw.rect(self.screen, color, (x, y, int(w * ratio), h), border_radius=4)
-        self._blit_text(f"{hp}/{hp_max}", (x + w + 8, y - 2), WHITE)
-
-    def _blit_text(self, text: str, pos: Tuple[int, int], color: Tuple[int, int, int]) -> None:
-        surf = self.font.render(text, True, color)
-        self.screen.blit(surf, pos)
-
     # 이펙트 로직
     def _spawn_player_projectile(
         self,
@@ -860,20 +849,6 @@ class SpellGame:
                 alive.append(e)
 
         self._effects = alive
-
-    def _render_effects(self) -> None:
-        for e in self._effects:
-            if e["type"] == "proj":
-                t = max(0.0, min(1.0, e["elapsed"] / float(e["dur"])) )
-                sx, sy = e["start"]
-                ex, ey = e["end"]
-                x = int(sx + (ex - sx) * t)
-                y = int(sy + (ey - sy) * t)
-                pygame.draw.circle(self.screen, e["color"], (x, y), e["r"]) 
-            elif e["type"] == "ring":
-                t = max(0.0, min(1.0, e["elapsed"] / float(e["dur"])) )
-                r = int(e["r0"] + (e["r1"] - e["r0"]) * t)
-                pygame.draw.circle(self.screen, e["color"], e["center"], r, e["w"])
 
 
 if __name__ == "__main__":
