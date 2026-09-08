@@ -130,6 +130,11 @@ class GestureAnalyzer:
         return None
 
     @property
+    def current_pose(self) -> Optional[str]:
+        """현재 감지 중(유지 카운트 진행 중)인 포즈 이름 또는 None."""
+        return self._current_pose
+
+    @property
     def pose_progress(self) -> float:
         """포즈 유지 진행률 (0.0~1.0)."""
         if self._current_pose is None:
