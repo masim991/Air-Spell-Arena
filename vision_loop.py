@@ -17,8 +17,9 @@ import logging
 import queue
 import threading
 import time
-from dataclasses import dataclass
-from typing import List, Optional, Tuple
+from collections import deque
+from dataclasses import dataclass, field
+from typing import Deque, List, Optional, Tuple
 
 import cv2
 import numpy as np
@@ -56,6 +57,7 @@ _MAX_CONSEC_READ_FAIL = 30   # 연속 프레임 획득 실패 허용 횟수
 _EMA_ALPHA = 0.35            # 검지 끝 좌표 EMA 계수
 _MIN_MOVE_SQ = 4             # 최소 이동(px^2) 미만이면 이전 좌표 유지
 _PAINT_RESET_FRAMES = 300    # 디버그 paint 캔버스 주기적 초기화
+_TRAIL_LEN = 24             # 게임 화면 트레일 표시용 최근 좌표 개수
 
 _POSE_COLORS = {
     "FIRE": (30, 140, 255), "WATER": (255, 150, 50),
@@ -72,6 +74,8 @@ class VisionResult:
     pose_progress: float = 0.0
     center: Optional[Point] = None
     fps: float = 0.0
+    trail: List[Tuple[float, float]] = field(default_factory=list)  # 정규화(0~1) 손끝 궤적
+    drawing: bool = False                    # 현재 스트로크 진행 중 여부
     annotated: Optional[np.ndarray] = None   # show_debug=True 일 때만
     mask: Optional[np.ndarray] = None
     paint: Optional[np.ndarray] = None
@@ -118,6 +122,7 @@ class VisionPipeline:
         # ── 워커 전용 상태(워커 스레드에서만 접근) ──
         self._ema: Optional[Tuple[float, float]] = None
         self._prev_center: Optional[Point] = None
+        self._trail: Deque[Tuple[float, float]] = deque(maxlen=_TRAIL_LEN)
         self._last_head_dir: Optional[str] = None
         self._paint: Optional[np.ndarray] = None
         self._paint_count = 0
@@ -233,6 +238,12 @@ class VisionPipeline:
         # ── center 스무딩(EMA + 최소 이동 임계) ──
         smoothed = self._smooth(center)
 
+        # ── 게임 화면 트레일용 정규화 좌표 누적 ──
+        if smoothed is not None:
+            self._trail.append((smoothed[0] / w0, smoothed[1] / h0))
+        else:
+            self._trail.clear()
+
         # ── 궤적 갱신 + 닫힌 궤적 분류 ──
         self._traj.update(smoothed)
         closed = self._traj.poll_last_closed()
@@ -240,6 +251,7 @@ class VisionPipeline:
             basic = self._analyzer.classify(closed)
             if basic != "UNKNOWN":
                 self._spell_q.put(("traj", basic))
+            self._trail.clear()
 
         # ── FaceMesh (N프레임마다만) ──
         if self._frame_i % _FACE_EVERY_N == 0:
@@ -266,6 +278,8 @@ class VisionPipeline:
             pose_progress=self._analyzer.pose_progress,
             center=smoothed,
             fps=self._fps,
+            trail=list(self._trail),
+            drawing=smoothed is not None,
             annotated=annotated,
             mask=mask,
             paint=paint,

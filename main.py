@@ -62,6 +62,7 @@ def _run_hand_tracking(game: SpellGame, combo_engine: SpellComboEngine) -> None:
             res = pipeline.poll_result()
             if res is not None:
                 last_head_dir = res.head_dir
+                game.set_gesture_feedback(res.trail, res.drawing)
                 if SHOW_DEBUG_WINDOWS and res.annotated is not None:
                     cv2.imshow("Tracking", res.annotated)
                     if res.mask is not None:

@@ -78,6 +78,16 @@ _SLOT_LABELS = {
 class FPRenderer:
     """Handles all first-person rendering for the game."""
 
+    # 완드 끝(주문 시전점) 화면 비율 좌표 — 매직넘버 집약
+    WAND_FX = 0.61
+    WAND_FY = 0.71
+    WAND_SWAY_GAIN = 0.06   # player_offset_x → 완드 좌우 흔들림 픽셀 비율
+
+    def wand_tip(self, player_offset_x: float = 0.0) -> Tuple[int, int]:
+        """완드 끝 화면 좌표. player_offset_x(-1~1)만큼 좌우로 흔들린다."""
+        shift = int(player_offset_x * self.W * self.WAND_SWAY_GAIN)
+        return int(self.W * self.WAND_FX) + shift, int(self.H * self.WAND_FY)
+
     def __init__(
         self,
         screen: pygame.Surface,
@@ -838,6 +848,8 @@ class FPRenderer:
         difficulty:        str = "normal",
         player_offset_x:   float = 0.0,
         dt_ms:             int = 16,
+        gesture_trail:     Optional[List[Tuple[float, float]]] = None,
+        gesture_drawing:   bool = False,
     ) -> None:
         self._tick += 1
         
@@ -866,6 +878,10 @@ class FPRenderer:
         # 5. Wand
         self._draw_wand(player_offset_x)
 
+        # 5.5. 궤적 주문 입력 피드백(허공에 그리는 손끝 트레일)
+        if gesture_trail:
+            self._draw_gesture_trail(gesture_trail, gesture_drawing)
+
         # 6. HUD
         self._draw_hud(player_hp, boss_hp, shield_time_left, lightning_cd_left, difficulty)
 
@@ -874,6 +890,27 @@ class FPRenderer:
             self._draw_spell_message(message_text, message_color, message_time_left)
 
         pygame.display.flip()
+
+    def _draw_gesture_trail(
+        self,
+        trail: List[Tuple[float, float]],
+        drawing: bool,
+    ) -> None:
+        """정규화(0~1) 손끝 좌표 리스트를 화면 위 페이딩 폴리라인으로 그린다."""
+        if not trail or len(trail) < 2:
+            return
+        W, H = self.W, self.H
+        pts = [(int(nx * W), int(ny * H)) for nx, ny in trail]
+        n = len(pts)
+        for i in range(1, n):
+            a = i / n                       # 최근일수록 밝고 굵게
+            col = (int(30 + 210 * a), int(150 + 90 * a), 255)
+            pygame.draw.line(self.screen, col, pts[i - 1], pts[i], max(1, int(1 + 4 * a)))
+        head = pts[-1]
+        pygame.draw.circle(self.screen, (0, 240, 255), head, 7, 2)
+        if drawing:
+            lbl = self.font.render("DRAWING", True, (0, 240, 255))
+            self.screen.blit(lbl, (head[0] + 12, head[1] - 8))
 
     def render_ending(self, state: str, tick: int) -> None:
         """Render game_over or you_win ending screen."""
@@ -1292,15 +1329,15 @@ class FPRenderer:
 
     def _draw_wand(self, player_offset_x: float = 0.0) -> None:
         W, H = self.W, self.H
-        wand_shift = int(player_offset_x * W * 0.06)
+        wand_shift = int(player_offset_x * W * self.WAND_SWAY_GAIN)
 
         # ── 호흡 + 미세 흔들림 애니메이션 ──────────────────────────────────
         bob   = int(math.sin(self._tick * 0.045) * 5)
         sway  = int(math.sin(self._tick * 0.019) * 2)
         wx_b  = int(W * 0.82) + wand_shift + sway
         wy_b  = H + 12 + bob // 4
-        wx_t  = int(W * 0.61) + wand_shift + sway // 2
-        wy_t  = int(H * 0.71) + bob
+        wx_t  = int(W * self.WAND_FX) + wand_shift + sway // 2
+        wy_t  = int(H * self.WAND_FY) + bob
 
         # ── 로브 소매 (전완부) ──────────────────────────────────────────────
         slv_pts = [
@@ -1452,9 +1489,9 @@ class FPRenderer:
 
     def _draw_effects(self, effects: List[dict], player_offset_x: float = 0.0) -> None:
         W, H = self.W, self.H
-        wand_shift  = int(player_offset_x * W * 0.06)
+        wand_shift  = int(player_offset_x * W * self.WAND_SWAY_GAIN)
         boss_shift  = int(-player_offset_x * W * 0.03)
-        wand_tip    = (int(W * 0.61) + wand_shift, int(H * 0.71))
+        wand_pt     = self.wand_tip(player_offset_x)
         boss_center = (W // 2 + boss_shift, H // 2 - 28)
 
         for e in effects:
@@ -1469,9 +1506,7 @@ class FPRenderer:
                 if e.get("origin") == "player":
                     # 시전 순간의 완드 위치 고정 → 플레이어가 이동해도 궤적 유지
                     cast_off = e.get("cast_offset_x", player_offset_x)
-                    cast_wand_shift = int(cast_off * W * 0.06)
-                    sx = int(W * 0.61) + cast_wand_shift
-                    sy = int(H * 0.71)
+                    sx, sy = self.wand_tip(cast_off)
                     ex, ey = boss_center
                     draw_r = max(3, int(r * (1.0 - t * 0.25)))
                 else:
@@ -1485,7 +1520,7 @@ class FPRenderer:
 
             elif etype == "cast":
                 t = max(0.0, min(1.0, e["elapsed"] / float(e["dur"])))
-                cx, cy = wand_tip
+                cx, cy = wand_pt
                 r    = int(e["r0"] + (e["r1"] - e["r0"]) * t)
                 fade = max(0.0, 1.0 - t)
                 col  = tuple(int(c * fade) for c in e["color"])
@@ -1520,8 +1555,7 @@ class FPRenderer:
             elif etype == "ring":
                 t = max(0.0, min(1.0, e["elapsed"] / float(e["dur"])))
                 r = int(e["r0"] + (e["r1"] - e["r0"]) * t)
-                cx_w = int(W * 0.61)
-                cy_w = int(H * 0.71)
+                cx_w, cy_w = wand_pt
                 fade = max(0.0, 1.0 - t)
                 col = tuple(int(v * fade) for v in e["color"])
 

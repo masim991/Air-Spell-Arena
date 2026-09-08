@@ -76,6 +76,13 @@ DIFFICULTY_PROB = {
     "impossible": 0.80,
 }
 
+# 키보드 폴백: 숫자 1~7 → 주문 (SPELL_SLOTS 순서와 동일)
+KEYBOARD_SPELLS = {
+    pygame.K_1: "FIRE", pygame.K_2: "WATER", pygame.K_3: "WIND",
+    pygame.K_4: "EARTH", pygame.K_5: "DARK", pygame.K_6: "LIGHT",
+    pygame.K_7: "LIGHTNING",
+}
+
 # ── 주문 상성표 ──────────────────────────────────────────────────────────────
 # 공격 원소가 방어(보스) 원소에 강하면 1.5×, 약하면 0.6×, 그 외 1.0×.
 _STRONG_AGAINST = {
@@ -204,6 +211,14 @@ class SpellGame:
         self.lightning_cd_left = 0          # HUD 표시용(=_cooldowns["LIGHTNING"])
         self._cooldowns: dict = {}          # 주문명 → 남은 쿨다운 ms
         self._boss_blind_left = 0           # BLINDNESS 적중 시 보스 회피 무력화 시간
+
+        # 키보드 폴백 입력 상태
+        self._pending_kb_spell: Optional[str] = None
+        self._kb_dir: Optional[str] = None
+
+        # 궤적 주문 입력 피드백(비전 파이프라인이 매 프레임 갱신)
+        self._gesture_trail: list = []
+        self._gesture_drawing: bool = False
 
         # 보스 공격 주기 타이머 / 페이즈
         self._boss_attack_timer = 0
@@ -392,6 +407,16 @@ class SpellGame:
                     if self._btn_pause.collidepoint(event.pos):
                         self._audio.play_click()
                         self._state = "pause"
+                # 키보드 폴백(데모·테스트·접근성): 1~7 주문, ←/→ 회피
+                elif event.type == pygame.KEYDOWN:
+                    if event.key in KEYBOARD_SPELLS:
+                        self._pending_kb_spell = KEYBOARD_SPELLS[event.key]
+                    elif event.key == pygame.K_LEFT:
+                        self._kb_dir = "LEFT"
+                    elif event.key == pygame.K_RIGHT:
+                        self._kb_dir = "RIGHT"
+                elif event.type == pygame.KEYUP and event.key in (pygame.K_LEFT, pygame.K_RIGHT):
+                    self._kb_dir = None
             elif self._state == "pause":
                 if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                     for rect, action, _ in self._pause_clickables:
@@ -477,12 +502,17 @@ class SpellGame:
             self._tick_ending += 1
             return True
 
-        # 시간 갱신 및 헤드 무브먼트 먼저 반영
+        # 시간 갱신 및 헤드/키보드 무브먼트 먼저 반영 (키보드가 우선)
         dt = self.clock.tick(FPS)  # milliseconds
         self._update_timers(dt)
-        self._update_player_dodge(head_dir, dt)
+        self._update_player_dodge(self._kb_dir or head_dir, dt)
 
-        # 주문 적용(플레이어 현재 위치에서 투사체가 출발하도록 이동 이후에 적용)
+        # 주문 적용 — 비전 입력이 없으면 키보드 폴백 사용
+        if spell_name is None and self._pending_kb_spell is not None:
+            spell_name = self._pending_kb_spell
+        self._pending_kb_spell = None
+
+        # (플레이어 현재 위치에서 투사체가 출발하도록 이동 이후에 적용)
         if spell_name:
             _result = self.apply_spell(spell_name)
             if _result.applied:
@@ -538,7 +568,7 @@ class SpellGame:
             self._cooldowns[label] = spec["cd"]
 
         # 공통 연출
-        wand_x, wand_y = int(SCREEN_W * 0.61), int(SCREEN_H * 0.71)
+        wand_x, wand_y = self._fp.wand_tip()
         pcount, pkind = spec["particles"]
         self._fp.add_particles(wand_x, wand_y, pcount, spec["color"], pkind)
         self._fp.add_camera_shake(*spec["shake"])
@@ -655,6 +685,10 @@ class SpellGame:
         self.lightning_cd_left = 0
         self._cooldowns        = {}
         self._boss_blind_left  = 0
+        self._pending_kb_spell = None
+        self._kb_dir           = None
+        self._gesture_trail    = []
+        self._gesture_drawing  = False
         self._boss_attack_timer = 0
         self.boss_phase        = 0
         self.boss_element      = BOSS_PHASES[0][1]
@@ -685,6 +719,11 @@ class SpellGame:
         self._player_fx = max(self._arena_min_x, min(self._arena_max_x, self._player_fx + vx * dt_s))
         self.player_pos = (int(round(self._player_fx)), self.player_pos[1])
 
+    def set_gesture_feedback(self, trail: list, drawing: bool) -> None:
+        """비전 파이프라인이 매 프레임 손끝 트레일(정규화 좌표)을 공급한다."""
+        self._gesture_trail = trail or []
+        self._gesture_drawing = bool(drawing)
+
     # ── 렌더링 ──────────────────────────────────────────────────────────────
 
     def _render(self, dt_ms: int = 16) -> None:
@@ -701,6 +740,8 @@ class SpellGame:
             difficulty=self.difficulty,
             player_offset_x=player_offset_x,
             dt_ms=dt_ms,
+            gesture_trail=self._gesture_trail,
+            gesture_drawing=self._gesture_drawing,
         )
 
     # 메뉴 렌더
