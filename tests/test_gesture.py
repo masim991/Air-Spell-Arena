@@ -90,3 +90,29 @@ def test_pose_requires_hold_then_fires_once():
     fired = [ga.update_pose(hand) for _ in range(5)]
     assert fired.count("FIRE") == 1          # 유지 후 딱 한 번
     assert ga.update_pose(None) is None
+
+
+def test_pose_tolerates_transient_miss():
+    """홀드 도중 1프레임 인식 실패가 있어도 스펠이 발동한다(리셋 대신 감쇠)."""
+    fire = _hand(fingers_up=("index", "middle", "ring", "pinky"))
+    seq = [fire, fire, fire, None, fire, fire, fire, fire]   # 4번째 프레임 손 떨림
+
+    ga = GestureAnalyzer(GestureConfig(pose_hold_frames=5, pose_cooldown_frames=5,
+                                       pose_miss_decay=2))
+    assert "FIRE" in [ga.update_pose(h) for h in seq]        # 감쇠 → 발동
+
+    # 감쇠량을 홀드값 이상으로 두면 사실상 리셋 → 같은 시퀀스로 발동 못 함
+    ga2 = GestureAnalyzer(GestureConfig(pose_hold_frames=5, pose_cooldown_frames=5,
+                                        pose_miss_decay=99))
+    assert "FIRE" not in [ga2.update_pose(h) for h in seq]
+
+
+def test_pose_switch_restarts_counter():
+    cfg = GestureConfig(pose_hold_frames=4, pose_cooldown_frames=5)
+    ga = GestureAnalyzer(cfg)
+    fire = _hand(fingers_up=("index", "middle", "ring", "pinky"))
+    wind = _hand(fingers_up=("index",))
+    seq = [fire, fire, fire, wind, wind, wind]   # 3프레임 만에 포즈 전환
+    out = [ga.update_pose(h) for h in seq]
+    assert out.count("FIRE") == 0               # 전환으로 리셋 → FIRE 미발동
+    assert ga.current_pose == "WIND"

@@ -69,8 +69,10 @@ class GestureConfig:
     horizontal_ratio: float = 0.65   # LIGHT/DARK 수평 우세 비율
 
     # 포즈 기반 (FIRE/WATER/EARTH/WIND)
-    pose_hold_frames: int = 10       # 발동까지 유지해야 하는 프레임 수
-    pose_cooldown_frames: int = 35   # 연속 발동 방지 쿨다운
+    pose_hold_frames: int = 8        # 발동까지 유지 프레임 (반응 빠르게)
+    pose_cooldown_frames: int = 22   # 연속 발동 방지 쿨다운 (재시전 지연 감소)
+    pose_miss_decay: int = 2         # 홀드 중 인식 실패 1프레임당 카운터 감소량
+                                     # (리셋 대신 감쇠 → 손 떨림에도 스펠이 잘 나감)
 
 
 class GestureAnalyzer:
@@ -109,23 +111,27 @@ class GestureAnalyzer:
                 self._hold_counter = 0
             return None
 
-        if landmarks is None:
-            self._current_pose = None
-            self._hold_counter = 0
-            return None
+        detected = _detect_pose(landmarks) if landmarks is not None else None
 
-        detected = _detect_pose(landmarks)
-
-        if detected == self._current_pose and detected is not None:
+        if detected is not None and detected == self._current_pose:
+            # 같은 포즈 유지 → 진행
             self._hold_counter += 1
-        else:
+        elif detected is not None:
+            # 새 포즈 시작 / 다른 포즈로 전환
             self._current_pose = detected
-            self._hold_counter = 0
+            self._hold_counter = 1
+        elif self._current_pose is not None:
+            # 이번 프레임만 인식 실패(손 떨림/일시적 손실) → 리셋 말고 감쇠
+            self._hold_counter -= self._cfg.pose_miss_decay
+            if self._hold_counter <= 0:
+                self._current_pose = None
+                self._hold_counter = 0
 
-        if detected and self._hold_counter >= self._cfg.pose_hold_frames:
+        if self._current_pose is not None and self._hold_counter >= self._cfg.pose_hold_frames:
+            fired = self._current_pose
             self._cooldown     = self._cfg.pose_cooldown_frames
             self._hold_counter = 0
-            return detected
+            return fired
 
         return None
 

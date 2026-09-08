@@ -72,8 +72,12 @@ def _run_hand_tracking(game: SpellGame, combo_engine: SpellComboEngine) -> None:
                         cv2.imshow("Mask", res.mask)
                     if res.paint is not None:
                         cv2.imshow("Paint", res.paint)
-                    if cv2.waitKey(1) & 0xFF == ord("q"):
+                    key = cv2.waitKey(1) & 0xFF
+                    if key == ord("q"):
                         break
+                    if key == ord("c"):          # 'c' → 머리 방향 정면 재보정
+                        pipeline.recenter_head()
+                        log.info("머리 방향 기준점 재보정")
 
             # 3) 게임 1프레임(내부에서 clock.tick(60) — 유일한 프레임 리미터)
             running = game.run_one_frame(spell_name, head_dir=last_head_dir)
@@ -138,3 +142,4 @@ def run() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(run())
+

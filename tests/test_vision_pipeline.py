@@ -55,3 +55,69 @@ def test_head_tracker_skips_copy_when_no_debug():
     ht.close()
     assert out is frame                 # 복사 없음
     assert direction in ("LEFT", "RIGHT", "CENTER")
+
+
+# ── HeadTracker 방향 로직 (합성 랜드마크) ──────────────────────────────────
+
+def _mk_head(monkeypatch):
+    """FaceMesh 를 스텁으로 대체한 HeadTracker + yaw 주입 함수 반환."""
+    import types
+
+    import numpy as np
+
+    from head_tracker import HeadTracker
+
+    ht = HeadTracker(draw_debug=False)
+
+    class _Res:
+        def __init__(self, lm):
+            self.multi_face_landmarks = [types.SimpleNamespace(landmark=lm)]
+
+    def feed(nose_dx: float):
+        # 얼굴중심 0.5, 볼 폭 0.30 → 코끝 x = 0.5 + nose_dx
+        lm = [types.SimpleNamespace(x=0.5, y=0.5) for _ in range(468)]
+        lm[4] = types.SimpleNamespace(x=0.5 + nose_dx, y=0.5)
+        lm[234] = types.SimpleNamespace(x=0.35, y=0.5)
+        lm[454] = types.SimpleNamespace(x=0.65, y=0.5)
+        ht._face_mesh = types.SimpleNamespace(process=lambda img: _Res(lm), close=lambda: None)
+        _, d = ht.process_frame(np.zeros((32, 32, 3), dtype=np.uint8))
+        return d
+
+    return ht, feed
+
+
+def test_head_no_drift_when_centered(monkeypatch):
+    ht, feed = _mk_head(monkeypatch)
+    dirs = {feed(0.0) for _ in range(40)}
+    ht.close()
+    assert dirs == {"CENTER"}                 # 가만히 있으면 절대 안 쏠림
+
+
+def test_head_small_turn_triggers_direction(monkeypatch):
+    ht, feed = _mk_head(monkeypatch)
+    for _ in range(15):
+        feed(0.0)                             # 캘리브레이션
+    left = [feed(-0.04) for _ in range(12)]   # 얼굴폭의 ~13% → 작은 고갯짓
+    right = [feed(0.04) for _ in range(12)]
+    ht.close()
+    assert "LEFT" in left
+    assert "RIGHT" in right
+
+
+def test_head_recenter_resets_calibration(monkeypatch):
+    ht, feed = _mk_head(monkeypatch)
+    for _ in range(15):
+        feed(0.08)                            # 치우친 자세로 시작
+    ht.recenter()
+    dirs = {feed(0.08) for _ in range(30)}    # 같은 자세를 새 '정면'으로
+    ht.close()
+    assert dirs == {"CENTER"}
+
+
+def test_head_rejects_single_frame_spike(monkeypatch):
+    ht, feed = _mk_head(monkeypatch)
+    for _ in range(20):
+        feed(0.0)
+    d_spike = feed(0.45)                      # 1프레임 대형 튐
+    ht.close()
+    assert d_spike == "CENTER"                # 스텝 제한으로 한 프레임에 안 넘어감

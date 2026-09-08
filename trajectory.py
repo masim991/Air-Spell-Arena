@@ -12,7 +12,7 @@ Trajectory = List[Point]
 class TrajectoryConfig:
     """궤적(스트로크) 종료/보관 관련 설정."""
 
-    disappear_frames_to_close: int = 2
+    disappear_frames_to_close: int = 4   # 추적이 잠깐 끊겨도 한 획을 쪼개지 않도록 여유
     max_trajectories: int = 10
     min_points_to_keep: int = 4
 

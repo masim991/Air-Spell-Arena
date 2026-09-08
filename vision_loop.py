@@ -14,6 +14,7 @@ VisionPipeline
 """
 
 import logging
+import math
 import queue
 import threading
 import time
@@ -54,8 +55,12 @@ _CAP_FPS = 30
 _INFER_WIDTH = 640           # 추론용 다운스케일 목표 폭(원본이 더 크면 축소)
 _FACE_EVERY_N = 3            # FaceMesh 는 N프레임마다만 추론
 _MAX_CONSEC_READ_FAIL = 30   # 연속 프레임 획득 실패 허용 횟수
+_HAND_COMPLEXITY = 1        # Hands 모델 복잡도(1=랜드마크 안정성↑, 스펠 인식률↑)
+_HAND_DET_CONF = 0.6       # 최초 손 검출 신뢰도
+_HAND_TRK_CONF = 0.5       # 추적 유지 신뢰도(낮을수록 빠른 손동작에도 안 끊김)
 _EMA_ALPHA = 0.35            # 검지 끝 좌표 EMA 계수
 _MIN_MOVE_SQ = 4             # 최소 이동(px^2) 미만이면 이전 좌표 유지
+_MAX_JUMP_PX = 230          # 프레임당 손끝 이동 한계(스파이크/튐 제거)
 _PAINT_RESET_FRAMES = 300    # 디버그 paint 캔버스 주기적 초기화
 _TRAIL_LEN = 24             # 게임 화면 트레일 표시용 최근 좌표 개수
 
@@ -105,9 +110,9 @@ class VisionPipeline:
         self._hands = mp_hands.Hands(
             static_image_mode=False,
             max_num_hands=1,
-            model_complexity=0,
-            min_detection_confidence=0.7,
-            min_tracking_confidence=0.7,
+            model_complexity=_HAND_COMPLEXITY,
+            min_detection_confidence=_HAND_DET_CONF,
+            min_tracking_confidence=_HAND_TRK_CONF,
         )
         self._head = HeadTracker(draw_mesh=False, draw_debug=False)
 
@@ -172,6 +177,10 @@ class VisionPipeline:
         except queue.Empty:
             pass
         return out
+
+    def recenter_head(self) -> None:
+        """머리 방향 기준점을 현재 자세로 재설정(정면 재보정)."""
+        self._head.recenter()
 
     # ── 워커 루프 ──────────────────────────────────────────────────────────
     def _run(self) -> None:
@@ -297,6 +306,12 @@ class VisionPipeline:
             ex, ey = float(cx), float(cy)
         else:
             ex, ey = self._ema
+            # 스파이크(튐) 억제: 직전 위치에서 너무 멀면 표본을 한계 거리로 당겨서 사용
+            ddx, ddy = cx - ex, cy - ey
+            dist = math.hypot(ddx, ddy)
+            if dist > _MAX_JUMP_PX:
+                scale = _MAX_JUMP_PX / dist
+                cx, cy = ex + ddx * scale, ey + ddy * scale
             ex = ex * (1.0 - _EMA_ALPHA) + cx * _EMA_ALPHA
             ey = ey * (1.0 - _EMA_ALPHA) + cy * _EMA_ALPHA
         self._ema = (ex, ey)
