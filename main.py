@@ -58,7 +58,7 @@ def _run_hand_tracking(game: SpellGame, combo_engine: SpellComboEngine) -> None:
 
             # 1) 주문 이벤트 소비: 포즈/궤적 모두 콤보 엔진 경유(최신 결과 채택)
             spell_name: Optional[str] = None
-            for _kind, name in pipeline.drain_spells():
+            for _, name in pipeline.drain_spells():
                 spell_name = combo_engine.push_basic_spell(name, _now_s())
 
             # 2) 최신 비전 결과 소비(연속 신호: head_dir, 디버그 프레임)

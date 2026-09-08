@@ -126,9 +126,10 @@ class AudioManager:
                 self._volumes[slot] = max(0, min(100, int(saved_vols[slot])))
 
         for spell in SPELL_SLOTS:
-            self._sfx_snds[spell] = self._mk_sound(self._config[spell])
-            if self._sfx_snds[spell]:
-                self._sfx_snds[spell].set_volume(self._volumes.get(spell, _DEFAULT_VOLUME) / 100)
+            snd = self._mk_sound(self._config[spell])
+            self._sfx_snds[spell] = snd
+            if snd is not None:
+                snd.set_volume(self._volumes.get(spell, _DEFAULT_VOLUME) / 100)
 
     def _load_config(self) -> dict:
         try:
@@ -208,9 +209,10 @@ class AudioManager:
             self._config[slot] = v if (v and v in active_files) else None
         # 사운드 재로드
         for spell in SPELL_SLOTS:
-            self._sfx_snds[spell] = self._mk_sound(self._config[spell])
-            if self._sfx_snds[spell]:
-                self._sfx_snds[spell].set_volume(self._volumes.get(spell, _DEFAULT_VOLUME) / 100)
+            snd = self._mk_sound(self._config[spell])
+            self._sfx_snds[spell] = snd
+            if snd is not None:
+                snd.set_volume(self._volumes.get(spell, _DEFAULT_VOLUME) / 100)
         self.play_bgm()
 
     def get_selected(self, slot: str) -> Optional[str]:
@@ -219,9 +221,10 @@ class AudioManager:
     def set_selected(self, slot: str, filename: Optional[str]) -> None:
         self._config[slot] = filename
         if slot in SPELL_SLOTS:
-            self._sfx_snds[slot] = self._mk_sound(filename)
-            if self._sfx_snds[slot]:
-                self._sfx_snds[slot].set_volume(self._volumes.get(slot, _DEFAULT_VOLUME) / 100)
+            snd = self._mk_sound(filename)
+            self._sfx_snds[slot] = snd
+            if snd is not None:
+                snd.set_volume(self._volumes.get(slot, _DEFAULT_VOLUME) / 100)
 
     # ── 재생 API ────────────────────────────────────────────────────────────
 

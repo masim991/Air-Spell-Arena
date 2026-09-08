@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import math
 import random
-from typing import List, Optional, Tuple
+from typing import List, Optional, Sequence, Tuple
 
 import pygame
 
@@ -122,10 +122,11 @@ class FPRenderer:
         # SRCALPHA 오버레이 캐시 (매 프레임 재할당 방지)
         self._pause_ov: Optional[pygame.Surface] = None
         self._end_ov: Optional[pygame.Surface] = None
+        _blank = pygame.Surface((1, 1), pygame.SRCALPHA)
         self._boss_sh_r: int = -1
-        self._boss_sh_surf: Optional[pygame.Surface] = None
+        self._boss_sh_surf: pygame.Surface = _blank
         self._boss_hl_r: int = -1
-        self._boss_hl_surf: Optional[pygame.Surface] = None
+        self._boss_hl_surf: pygame.Surface = _blank
         # 대기 파티클(재/먼지) + 시네마틱 컬러 그레이드 캐시
         self._motes: List[dict] = []
         self._grade_cache: Optional[pygame.Surface] = None
@@ -826,7 +827,7 @@ class FPRenderer:
             self._draw_arrow_shape(ax, cy, -math.pi / 2 if icon == "head_l" else math.pi / 2, col)
 
     def _draw_arrow_shape(
-        self, cx: int, cy: int, angle: float, color: Tuple[int, int, int]
+        self, cx: int, cy: int, angle: float, color: Sequence[int]
     ) -> None:
         """Draw a filled arrowhead pointing in the given angle."""
         sz = 12
@@ -1960,7 +1961,7 @@ class FPRenderer:
     def _draw_cast_styled(
         self,
         cx: int, cy: int, r: int,
-        col: Tuple[int, int, int],
+        col: Sequence[int],
         style: str, fade: float,
     ) -> None:
         """Element-specific cast flash at the wand tip."""
@@ -2022,7 +2023,7 @@ class FPRenderer:
     def _draw_impact_styled(
         self,
         cx: int, cy: int, r: int,
-        col: Tuple[int, int, int],
+        col: Sequence[int],
         style: str, t: float,
     ) -> None:
         """Element-specific impact explosion at boss."""
@@ -2245,7 +2246,7 @@ class FPRenderer:
     def _draw_glow(
         self,
         cx: int, cy: int, r: int,
-        color: Tuple[int, int, int],
+        color: Sequence[int],
         layers: int = 4,
     ) -> None:
         for i in range(layers, 0, -1):
@@ -2321,8 +2322,8 @@ class FPRenderer:
 
     @staticmethod
     def _pulse_color(
-        a: Tuple[int, int, int],
-        b: Tuple[int, int, int],
+        a: Sequence[int],
+        b: Sequence[int],
         tick: int,
         period: int,
     ) -> Tuple[int, int, int]:
@@ -2331,8 +2332,8 @@ class FPRenderer:
 
     @staticmethod
     def _lerp_color(
-        a: Tuple[int, int, int],
-        b: Tuple[int, int, int],
+        a: Sequence[int],
+        b: Sequence[int],
         t: float,
     ) -> Tuple[int, int, int]:
         return (

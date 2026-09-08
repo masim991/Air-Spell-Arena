@@ -25,11 +25,11 @@ from typing import Deque, List, Optional, Tuple
 import cv2
 import numpy as np
 
-# MediaPipe Hands 직접 임포트(robust)
+# MediaPipe Hands 직접 임포트(robust). mediapipe 는 타입 스텁이 없음 → type:ignore.
 try:
-    from mediapipe.solutions import hands as mp_hands
-    from mediapipe.solutions import drawing_utils as mp_drawing
-    from mediapipe.solutions import drawing_styles as mp_styles
+    from mediapipe.solutions import hands as mp_hands  # type: ignore[import-untyped]
+    from mediapipe.solutions import drawing_utils as mp_drawing  # type: ignore[import-untyped]
+    from mediapipe.solutions import drawing_styles as mp_styles  # type: ignore[import-untyped]
 except Exception:
     try:
         from mediapipe.python.solutions import hands as mp_hands  # type: ignore
@@ -221,8 +221,10 @@ class VisionPipeline:
         annotated = frame.copy() if self._show_debug else None
         hand_lm = None
         center: Optional[Point] = None
-        if results.multi_hand_landmarks:
-            hlm = results.multi_hand_landmarks[0]
+        # mediapipe 결과는 동적 NamedTuple → getattr 로 안전 접근
+        hand_landmarks = getattr(results, "multi_hand_landmarks", None)
+        if hand_landmarks:
+            hlm = hand_landmarks[0]
             hand_lm = hlm.landmark
             tip = hand_lm[mp_hands.HandLandmark.INDEX_FINGER_TIP]
             center = (
@@ -232,7 +234,8 @@ class VisionPipeline:
             if annotated is not None:
                 try:
                     mp_drawing.draw_landmarks(
-                        annotated, hlm, mp_hands.HAND_CONNECTIONS,
+                        annotated, hlm,
+                        mp_hands.HAND_CONNECTIONS,  # type: ignore[arg-type]
                         mp_styles.get_default_hand_landmarks_style(),
                         mp_styles.get_default_hand_connections_style(),
                     )

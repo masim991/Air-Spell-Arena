@@ -4,37 +4,40 @@
 """
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 from vision_loop import VisionPipeline, VisionResult, _EMA_ALPHA
 
+# VisionPipeline._smooth 는 self 의 _ema / _prev_center 만 사용 → 카메라 없이
+# 최소 상태 객체에 언바운드 메서드를 직접 적용해 검증한다.
+_smooth = VisionPipeline._smooth
 
-class _Stub:
-    """VisionPipeline._smooth 를 빌려 호출하기 위한 최소 상태 컨테이너."""
-    _ema = None
-    _prev_center = None
 
-_Stub._smooth = VisionPipeline._smooth
+def _state():
+    return SimpleNamespace(_ema=None, _prev_center=None)
 
 
 def test_smooth_first_sample_passthrough():
-    assert _Stub()._smooth((100, 200)) == (100, 200)
+    assert _smooth(_state(), (100, 200)) == (100, 200)
 
 
 def test_smooth_deadzone_holds_previous():
-    s = _Stub()
-    s._smooth((100, 100))
-    assert s._smooth((101, 100)) == (100, 100)   # 이동 < 2px → 이전 값 유지
+    s = _state()
+    _smooth(s, (100, 100))
+    assert _smooth(s, (101, 100)) == (100, 100)   # 이동 < 2px → 이전 값 유지
 
 
 def test_smooth_ema_tracks_towards_target():
-    s = _Stub()
-    s._smooth((0, 0))
-    out = s._smooth((100, 0))
+    s = _state()
+    _smooth(s, (0, 0))
+    out = _smooth(s, (100, 0))
+    assert out is not None
     assert 0 < out[0] < 100
     assert abs(out[0] - 100 * _EMA_ALPHA) <= 1
 
 
 def test_smooth_none_returns_none():
-    assert _Stub()._smooth(None) is None
+    assert _smooth(_state(), None) is None
 
 
 def test_vision_result_defaults():

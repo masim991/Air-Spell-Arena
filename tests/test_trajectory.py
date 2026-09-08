@@ -44,6 +44,7 @@ def test_new_stroke_starts_after_gap():
     _feed(buf, [(100, 100), (105, 100), (110, 100)])
     buf.update(None)
     second = buf.poll_last_closed()
+    assert first is not None and second is not None
     assert first[0] == (0, 0)
     assert second[0] == (100, 100)
 

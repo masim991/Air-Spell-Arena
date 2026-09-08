@@ -7,9 +7,9 @@ import cv2
 import numpy as np
 
 try:
-    from mediapipe.solutions import face_mesh as mp_face_mesh
-    from mediapipe.solutions import drawing_utils as mp_drawing
-    from mediapipe.solutions import drawing_styles as mp_styles
+    from mediapipe.solutions import face_mesh as mp_face_mesh  # type: ignore[import-untyped]
+    from mediapipe.solutions import drawing_utils as mp_drawing  # type: ignore[import-untyped]
+    from mediapipe.solutions import drawing_styles as mp_styles  # type: ignore[import-untyped]
 except Exception:
     try:
         from mediapipe.python.solutions import face_mesh as mp_face_mesh  # type: ignore
@@ -89,7 +89,7 @@ class HeadTracker:
         self._history:  Deque[float]    = deque(maxlen=max(1, smooth_window))
 
         # 히스테리시스 상태
-        self._last_dir:       str = "CENTER"
+        self._last_dir:       HeadDirection = "CENTER"
         self._hold:           int = 0
         self._no_face_frames: int = 0
 
@@ -112,10 +112,14 @@ class HeadTracker:
 
         h, w = frame.shape[:2]
         annotated = frame.copy() if self.draw_debug else frame
+        if self._face_mesh is None:            # close() 이후 방어
+            return annotated, self._last_dir
         img_rgb   = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         results   = self._face_mesh.process(img_rgb)
 
-        if not results.multi_face_landmarks:
+        # mediapipe 결과는 동적 NamedTuple → getattr 로 안전 접근
+        face_landmarks = getattr(results, "multi_face_landmarks", None)
+        if not face_landmarks:
             self._no_face_frames += 1
             if self._no_face_frames > _NO_FACE_HOLD:
                 self._last_dir = "CENTER"
@@ -125,13 +129,13 @@ class HeadTracker:
             return annotated, self._last_dir
 
         self._no_face_frames = 0
-        lm = results.multi_face_landmarks[0].landmark
+        lm = face_landmarks[0].landmark
 
         if self.draw_mesh:
             mp_drawing.draw_landmarks(
                 image=annotated,
-                landmark_list=results.multi_face_landmarks[0],
-                connections=mp_face_mesh.FACEMESH_CONTOURS,
+                landmark_list=face_landmarks[0],
+                connections=mp_face_mesh.FACEMESH_CONTOURS,  # type: ignore[arg-type]
                 landmark_drawing_spec=None,
                 connection_drawing_spec=mp_styles.get_default_face_mesh_contours_style(),
             )
@@ -234,21 +238,21 @@ class HeadTracker:
         """히스테리시스 + 최소 유지 프레임을 적용한 방향 판정."""
         self._hold += 1
         prev = self._last_dir
+        new: HeadDirection
 
         if prev == "LEFT":
             # LEFT 탈출 조건: hold 충분히 & offset이 EXIT 경계 안쪽으로 복귀
             new = "CENTER" if (self._hold >= _MIN_HOLD and smooth > -_EXIT) else "LEFT"
         elif prev == "RIGHT":
             new = "CENTER" if (self._hold >= _MIN_HOLD and smooth < _EXIT) else "RIGHT"
-        else:  # CENTER
-            if smooth < -_ENTER:
-                new = "LEFT"
-            elif smooth > _ENTER:
-                new = "RIGHT"
-            else:
-                new = "CENTER"
+        elif smooth < -_ENTER:
+            new = "LEFT"
+        elif smooth > _ENTER:
+            new = "RIGHT"
+        else:
+            new = "CENTER"
 
         if new != prev:
             self._hold = 0
         self._last_dir = new
-        return new  # type: ignore[return-value]
+        return new
