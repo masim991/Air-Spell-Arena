@@ -1,0 +1,6 @@
+# Air Spell Arena - runtime dependencies
+# Python 3.12 기준 (MediaPipe 0.10.x 는 Python 3.9~3.12 지원, 3.13 미지원)
+opencv-python==4.13.0.92
+mediapipe==0.10.14
+pygame==2.6.1
+numpy==2.2.5

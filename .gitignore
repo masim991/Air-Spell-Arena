@@ -29,5 +29,9 @@ Thumbs.db
 *.tflite
 *.caffemodel
 
+# Test / lint caches
+.pytest_cache/
+.ruff_cache/
+
 # Logs
 *.log

@@ -1,17 +1,19 @@
 from __future__ import annotations
 """
-main.py – OpenCV(air_canvas) + TrajectoryBuffer + GestureAnalyzer + Pygame(SpellGame)
-하나의 메인 루프에서 프레임 단위로 모두 조율합니다.
+main.py – 비전 입력(VisionPipeline / AirCanvas) + 제스처 + Pygame(SpellGame) 조율.
+
+게임 루프는 비전 워커 스레드와 분리되어, 카메라·MediaPipe 지연에 묶이지 않는다.
+- 손 추적 경로(USE_HAND_TRACKING=True): VisionPipeline 이 별도 스레드에서 캡처·추론,
+  메인 루프는 최신 결과(poll_result)와 주문 이벤트(drain_spells)만 소비한다.
+- HSV 마커 경로(False): AirCanvas.update() 를 메인 루프에서 직접 호출한다.
 
 종료 조건:
 - Pygame 창 닫힘 / ESC → SpellGame.run_one_frame() 이 False 반환
-- OpenCV 창에서 'q' → AirCanvas.update() 가 None 반환
-
-디버그:
-- show_debug_windows = True 이면 Tracking/Paint/Mask를 함께 표시(나중에 False로 끌 수 있음)
-- 필요 시 process_every_nth_frame 조절로 카메라 처리 주기를 낮출 수 있음(기본 1)
+- 디버그 창에서 'q'
+- 비전 파이프라인 연속 실패(graceful)
 """
 
+import logging
 from typing import Optional
 
 import cv2
@@ -21,95 +23,116 @@ from gesture import GestureAnalyzer
 from game import SpellGame
 from spell_combo import SpellComboEngine
 from trajectory import TrajectoryBuffer, TrajectoryConfig
-from vision_loop import run_vision_loop
+from vision_loop import VisionPipeline
 
 
 # ── 실행 옵션 ────────────────────────────────────────────────────────────────
-SHOW_DEBUG_WINDOWS = True
-PROCESS_EVERY_NTH_FRAME = 1  # 성능이 낮으면 2~3 이상으로 올려보세요.
+SHOW_DEBUG_WINDOWS = True    # 웹캠 디버그 창(Tracking/Mask/Paint) 표시
 CAMERA_INDEX = 0
-SHOW_TRACKBARS = True        # 추후 False로 끄면 트랙바 없이 고정 HSV로 동작
-USE_HAND_TRACKING = True     # True면 MediaPipe 기반 손가락 추적 경로 사용
+SHOW_TRACKBARS = False       # HSV 경로 트랙바
+USE_HAND_TRACKING = True     # True: MediaPipe 손가락 추적, False: HSV 마커 추적
+
+log = logging.getLogger("air_spell_arena.main")
 
 
-def run() -> int:
-    # 모듈 초기화
-    traj_buffer = TrajectoryBuffer(TrajectoryConfig())
-    analyzer = GestureAnalyzer()
-    combo_engine = SpellComboEngine(combo_window=1.2)
-    game = SpellGame()
+def _now_s() -> float:
+    """단조 증가 초 단위 타임스탬프(콤보 윈도 계산용)."""
+    return cv2.getTickCount() / cv2.getTickFrequency()
 
-    canvas = None
-    cap = None
 
-    if USE_HAND_TRACKING:
-        cap = cv2.VideoCapture(CAMERA_INDEX)
-    else:
-        canvas = AirCanvas(camera_index=CAMERA_INDEX, show_trackbars=SHOW_TRACKBARS)
+def _run_hand_tracking(game: SpellGame, combo_engine: SpellComboEngine) -> None:
+    """VisionPipeline(워커 스레드) 기반 메인 루프."""
+    pipeline = VisionPipeline(CAMERA_INDEX, show_debug=SHOW_DEBUG_WINDOWS)
+    pipeline.start()
+    if pipeline.failed:
+        log.error("비전 파이프라인 시작 실패 — 종료합니다.")
+        return
 
-    frame_idx = 0
+    last_head_dir: Optional[str] = None
     running = True
-
     try:
         while running:
-            # 1) 카메라 1프레임 처리
-            if USE_HAND_TRACKING:
-                try:
-                    if not run_vision_loop(cap, traj_buffer,
-                                           gesture_analyzer=analyzer,
-                                           show_debug=SHOW_DEBUG_WINDOWS):
-                        break
-                except KeyboardInterrupt:
-                    break
-                except Exception as _vl_err:
-                    print(f"[vision] 프레임 처리 오류 (건너뜀): {_vl_err}")
-            else:
-                data = canvas.update()
-                if data is None:
-                    break  # 'q' 또는 카메라 오류
-                # HSV 경로에서는 center를 data에서 공급
-                traj_buffer.update(data.center)
+            if pipeline.failed:
+                log.error("비전 파이프라인이 중단되었습니다 — 게임을 종료합니다.")
+                break
 
-            # 3a) 포즈 기반 주문 (FIRE/WATER/EARTH/WIND) — run_vision_loop에서 포스팅
+            # 1) 주문 이벤트 소비: 포즈/궤적 모두 콤보 엔진 경유(최신 결과 채택)
             spell_name: Optional[str] = None
-            if USE_HAND_TRACKING:
-                pose_spell = getattr(run_vision_loop, "_last_pose_spell", None)
-                if pose_spell:
-                    spell_name = pose_spell
-                    setattr(run_vision_loop, "_last_pose_spell", None)
+            for _kind, name in pipeline.drain_spells():
+                spell_name = combo_engine.push_basic_spell(name, _now_s())
 
-            # 3b) 트래젝토리 기반 주문 (LIGHT/DARK/CIRCLE/ZIGZAG)
+            # 2) 최신 비전 결과 소비(연속 신호: head_dir, 디버그 프레임)
+            res = pipeline.poll_result()
+            if res is not None:
+                last_head_dir = res.head_dir
+                game.set_gesture_feedback(res.trail, res.drawing)
+                if SHOW_DEBUG_WINDOWS and res.annotated is not None:
+                    cv2.imshow("Tracking", res.annotated)
+                    if res.mask is not None:
+                        cv2.imshow("Mask", res.mask)
+                    if res.paint is not None:
+                        cv2.imshow("Paint", res.paint)
+                    if cv2.waitKey(1) & 0xFF == ord("q"):
+                        break
+
+            # 3) 게임 1프레임(내부에서 clock.tick(60) — 유일한 프레임 리미터)
+            running = game.run_one_frame(spell_name, head_dir=last_head_dir)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        pipeline.close()
+
+
+def _run_hsv_tracking(game: SpellGame, combo_engine: SpellComboEngine) -> None:
+    """AirCanvas(HSV 마커) 기반 메인 루프 — 단일 스레드."""
+    canvas = AirCanvas(camera_index=CAMERA_INDEX, show_trackbars=SHOW_TRACKBARS)
+    traj_buffer = TrajectoryBuffer(TrajectoryConfig())
+    analyzer = GestureAnalyzer()
+    running = True
+    try:
+        while running:
+            data = canvas.update()
+            if data is None:
+                break  # 'q' 또는 카메라 오류
+
+            traj_buffer.update(data.center)
+            spell_name: Optional[str] = None
             traj = traj_buffer.poll_last_closed()
-            if traj and spell_name is None:
-                basic_spell = analyzer.classify(traj)
-                if basic_spell not in ("UNKNOWN",):
-                    spell_name = combo_engine.push_basic_spell(
-                        basic_spell, cv2.getTickCount() / cv2.getTickFrequency()
-                    )
+            if traj is not None:
+                basic = analyzer.classify(traj)
+                if basic != "UNKNOWN":
+                    spell_name = combo_engine.push_basic_spell(basic, _now_s())
 
-            # 4) 게임 1프레임 진행(이벤트 처리 + 주문 적용 + 렌더)
-            head_dir = getattr(run_vision_loop, "_last_head_dir", None) if USE_HAND_TRACKING else None
-            running = game.run_one_frame(spell_name, head_dir=head_dir)
-
-            # 5) 디버그 창 표시(HSV 경로만 별도 표시, Hand 경로는 run_vision_loop가 표시)
-            if not USE_HAND_TRACKING and SHOW_DEBUG_WINDOWS and data is not None:
+            if SHOW_DEBUG_WINDOWS:
                 cv2.imshow("Tracking", data.frame)
                 cv2.imshow("Paint", data.paint)
                 cv2.imshow("Mask", data.mask)
+                if cv2.waitKey(1) & 0xFF == ord("q"):
+                    break
 
-            # 6) FPS/성능 조절(필요 시 N프레임마다만 처리하도록 확장 가능)
-            frame_idx += 1
-            # if frame_idx % PROCESS_EVERY_NTH_FRAME != 0:
-            #     pass  # 여기서 샘플링 전략을 바꾸고 싶다면 적용
+            running = game.run_one_frame(spell_name, head_dir=None)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        canvas.release()
 
+
+def run() -> int:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        datefmt="%H:%M:%S",
+    )
+    combo_engine = SpellComboEngine(combo_window=1.2)
+    game = SpellGame()
+    try:
+        if USE_HAND_TRACKING:
+            _run_hand_tracking(game, combo_engine)
+        else:
+            _run_hsv_tracking(game, combo_engine)
     finally:
         game.close()
-        if cap is not None:
-            cap.release()
-            cv2.destroyAllWindows()
-        if canvas is not None:
-            canvas.release()
-
+        cv2.destroyAllWindows()
     return 0
 
 

@@ -57,6 +57,8 @@ LTNG_NEON     = (100, 220, 255)  # Electric Blue
 PLAYER_MAX_HP = 100
 BOSS_MAX_HP   = 100
 
+DANGER_HP_RATIO = 0.28   # 이 비율 아래에서 심장박동 경고 비네트 발동
+
 # ── Audio-settings slot definitions ────────────────────────────────────────────
 _SLOT_ORDER  = ("bgm", "FIRE", "WATER", "WIND", "EARTH", "DARK", "LIGHT", "SHIELD")
 _SLOT_COLORS = {
@@ -77,6 +79,16 @@ _SLOT_LABELS = {
 
 class FPRenderer:
     """Handles all first-person rendering for the game."""
+
+    # 완드 끝(주문 시전점) 화면 비율 좌표 — 매직넘버 집약
+    WAND_FX = 0.61
+    WAND_FY = 0.71
+    WAND_SWAY_GAIN = 0.06   # player_offset_x → 완드 좌우 흔들림 픽셀 비율
+
+    def wand_tip(self, player_offset_x: float = 0.0) -> Tuple[int, int]:
+        """완드 끝 화면 좌표. player_offset_x(-1~1)만큼 좌우로 흔들린다."""
+        shift = int(player_offset_x * self.W * self.WAND_SWAY_GAIN)
+        return int(self.W * self.WAND_FX) + shift, int(self.H * self.WAND_FY)
 
     def __init__(
         self,
@@ -433,7 +445,7 @@ class FPRenderer:
             clickables.append((toggle_rect, "toggle_custom", None))
 
         # ── 슬롯 탭 (2줄 × 4 = 8개) ──────────────────────────────────────
-        mx, my = 40, 40    # margin
+        mx = 40    # 좌우 여백
         tab_gap = 8
         tab_w   = (W - mx * 2 - tab_gap * 3) // 4   # ≈199
         tab_h   = 32
@@ -838,6 +850,8 @@ class FPRenderer:
         difficulty:        str = "normal",
         player_offset_x:   float = 0.0,
         dt_ms:             int = 16,
+        gesture_trail:     Optional[List[Tuple[float, float]]] = None,
+        gesture_drawing:   bool = False,
     ) -> None:
         self._tick += 1
         
@@ -866,14 +880,63 @@ class FPRenderer:
         # 5. Wand
         self._draw_wand(player_offset_x)
 
+        # 5.5. 궤적 주문 입력 피드백(허공에 그리는 손끝 트레일)
+        if gesture_trail:
+            self._draw_gesture_trail(gesture_trail, gesture_drawing)
+
         # 6. HUD
         self._draw_hud(player_hp, boss_hp, shield_time_left, lightning_cd_left, difficulty)
+
+        # 6.7. 위급 시 심장박동 비네트 (HP 낮을수록 빠르고 강하게)
+        hp_ratio = player_hp / PLAYER_MAX_HP
+        if 0.0 < hp_ratio < DANGER_HP_RATIO:
+            self._draw_danger_vignette(hp_ratio)
 
         # 7. Spell message
         if message_time_left > 0 and message_text:
             self._draw_spell_message(message_text, message_color, message_time_left)
 
         pygame.display.flip()
+
+    def _draw_gesture_trail(
+        self,
+        trail: List[Tuple[float, float]],
+        drawing: bool,
+    ) -> None:
+        """정규화(0~1) 손끝 좌표 리스트를 화면 위 페이딩 폴리라인으로 그린다."""
+        if not trail or len(trail) < 2:
+            return
+        W, H = self.W, self.H
+        pts = [(int(nx * W), int(ny * H)) for nx, ny in trail]
+        n = len(pts)
+        for i in range(1, n):
+            a = i / n                       # 최근일수록 밝고 굵게
+            col = (int(30 + 210 * a), int(150 + 90 * a), 255)
+            pygame.draw.line(self.screen, col, pts[i - 1], pts[i], max(1, int(1 + 4 * a)))
+        head = pts[-1]
+        # 리드미컬한 맥동 헤드 노드
+        puls = 0.5 + 0.5 * math.sin(self._tick * 0.32)
+        self._draw_glow(head[0], head[1], int(8 + 6 * puls), (0, 200, 255), layers=3)
+        pygame.draw.circle(self.screen, (0, 240, 255), head, int(6 + 4 * puls), 2)
+        pygame.draw.circle(self.screen, (200, 250, 255), head, 2)
+        if drawing:
+            lbl = self.font.render("DRAWING", True, (0, 240, 255))
+            self.screen.blit(lbl, (head[0] + 14, head[1] - 8))
+
+    def _draw_danger_vignette(self, hp_ratio: float) -> None:
+        """저체력 경고 — HP가 낮을수록 박동이 빨라지고 붉은 테두리가 짙어진다."""
+        W, H = self.W, self.H
+        sev = 1.0 - hp_ratio / DANGER_HP_RATIO           # 0(경계) → 1(빈사)
+        period = 46 - int(28 * sev)                       # 박동 주기 단축
+        beat = (math.sin(self._tick * 2 * math.pi / max(period, 1)) + 1) / 2
+        strength = 0.35 + 0.65 * sev
+        peak = int(26 + 30 * strength)
+        for w in range(1, 16):
+            fade = (1.0 - (w - 1) / 15) * beat * strength
+            if fade <= 0:
+                continue
+            c = (min(255, int(90 + peak * fade)), int(12 * fade), int(24 * fade))
+            pygame.draw.rect(self.screen, c, (w, w, W - w * 2, H - w * 2), 1)
 
     def render_ending(self, state: str, tick: int) -> None:
         """Render game_over or you_win ending screen."""
@@ -1292,15 +1355,15 @@ class FPRenderer:
 
     def _draw_wand(self, player_offset_x: float = 0.0) -> None:
         W, H = self.W, self.H
-        wand_shift = int(player_offset_x * W * 0.06)
+        wand_shift = int(player_offset_x * W * self.WAND_SWAY_GAIN)
 
         # ── 호흡 + 미세 흔들림 애니메이션 ──────────────────────────────────
         bob   = int(math.sin(self._tick * 0.045) * 5)
         sway  = int(math.sin(self._tick * 0.019) * 2)
         wx_b  = int(W * 0.82) + wand_shift + sway
         wy_b  = H + 12 + bob // 4
-        wx_t  = int(W * 0.61) + wand_shift + sway // 2
-        wy_t  = int(H * 0.71) + bob
+        wx_t  = int(W * self.WAND_FX) + wand_shift + sway // 2
+        wy_t  = int(H * self.WAND_FY) + bob
 
         # ── 로브 소매 (전완부) ──────────────────────────────────────────────
         slv_pts = [
@@ -1452,9 +1515,8 @@ class FPRenderer:
 
     def _draw_effects(self, effects: List[dict], player_offset_x: float = 0.0) -> None:
         W, H = self.W, self.H
-        wand_shift  = int(player_offset_x * W * 0.06)
         boss_shift  = int(-player_offset_x * W * 0.03)
-        wand_tip    = (int(W * 0.61) + wand_shift, int(H * 0.71))
+        wand_pt     = self.wand_tip(player_offset_x)
         boss_center = (W // 2 + boss_shift, H // 2 - 28)
 
         for e in effects:
@@ -1469,9 +1531,7 @@ class FPRenderer:
                 if e.get("origin") == "player":
                     # 시전 순간의 완드 위치 고정 → 플레이어가 이동해도 궤적 유지
                     cast_off = e.get("cast_offset_x", player_offset_x)
-                    cast_wand_shift = int(cast_off * W * 0.06)
-                    sx = int(W * 0.61) + cast_wand_shift
-                    sy = int(H * 0.71)
+                    sx, sy = self.wand_tip(cast_off)
                     ex, ey = boss_center
                     draw_r = max(3, int(r * (1.0 - t * 0.25)))
                 else:
@@ -1485,7 +1545,7 @@ class FPRenderer:
 
             elif etype == "cast":
                 t = max(0.0, min(1.0, e["elapsed"] / float(e["dur"])))
-                cx, cy = wand_tip
+                cx, cy = wand_pt
                 r    = int(e["r0"] + (e["r1"] - e["r0"]) * t)
                 fade = max(0.0, 1.0 - t)
                 col  = tuple(int(c * fade) for c in e["color"])
@@ -1520,14 +1580,38 @@ class FPRenderer:
             elif etype == "ring":
                 t = max(0.0, min(1.0, e["elapsed"] / float(e["dur"])))
                 r = int(e["r0"] + (e["r1"] - e["r0"]) * t)
-                cx_w = int(W * 0.61)
-                cy_w = int(H * 0.71)
+                cx_w, cy_w = wand_pt
                 fade = max(0.0, 1.0 - t)
                 col = tuple(int(v * fade) for v in e["color"])
 
                 self._draw_glow(cx_w, cy_w, max(8, r // 2), col, layers=4)
                 pygame.draw.circle(self.screen, col, (cx_w, cy_w), r, e["w"])
                 pygame.draw.circle(self.screen, col, (cx_w, cy_w), max(8, r - 10), 1)
+
+            elif etype == "telegraph":
+                # 보스 시전 경고: 보스 중심에서 수축하는 붉은 링 + 점멸
+                t = max(0.0, min(1.0, e["elapsed"] / float(e["dur"])))
+                cx, cy = boss_center
+                r = int(96 - 66 * t)
+                pulse = 0.55 + 0.45 * abs(math.sin(self._tick * 0.6))
+                col = (int(255 * pulse), int(70 * pulse), int(70 * pulse))
+                try:
+                    pygame.draw.circle(self.screen, col, (cx, cy), max(6, r), 3)
+                    pygame.draw.circle(self.screen, col, (cx, cy), max(3, r // 2), 1)
+                except Exception:
+                    pass
+
+            elif etype == "flash":
+                # 화면 전체 색 파동 — 보스 페이즈 전환 등 리듬 강조용
+                t = max(0.0, min(1.0, e["elapsed"] / float(e["dur"])))
+                a = int(150 * (1.0 - t) ** 2)
+                if a > 0:
+                    ov = pygame.Surface((W, H), pygame.SRCALPHA)
+                    ov.fill((*e["color"], a))
+                    self.screen.blit(ov, (0, 0))
+                    band_h = max(2, int(H * 0.5 * (1.0 - t)))
+                    cy = int(H * t)
+                    pygame.draw.rect(self.screen, e["color"], (0, cy - band_h // 2, W, band_h), 2)
 
     # ── Shield vignette ────────────────────────────────────────────────────────
 

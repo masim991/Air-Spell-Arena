@@ -33,7 +33,6 @@ GOLD = (255, 215, 50)  # Bright Gold
 PLAYER_MAX_HP = 100
 BOSS_MAX_HP = 100
 
-FIRE_DMG = 12            # LINE → FIRE
 LIGHTNING_DMG = 25       # ZIGZAG → LIGHTNING
 LIGHTNING_COOLDOWN_MS = 4000
 
@@ -41,7 +40,6 @@ SHIELD_REDUCTION = 0.5   # CIRCLE → SHIELD (입는 피해 50% 감소)
 SHIELD_DURATION_MS = 2500
 
 BOSS_DMG = 5
-BOSS_ATTACK_INTERVAL_MS = 1667  # 1000 / 0.6 → 0.6× speed
 
 MESSAGE_DURATION_MS = 1500
 PROJECTILE_DURATION_MS = 450
@@ -55,44 +53,7 @@ EARTH_NEON = (200, 160, 100)  # Golden Earth
 DARK_NEON = (160, 80, 255)  # Deep Purple
 LTNG_NEON = (100, 220, 255)  # Electric Blue
 
-ELEMENT_PRESETS = {
-    "FIRE": {
-        "color": FIRE_NEON,
-        "style": "fire",
-        "dmg": FIRE_DMG,
-        "dur": PROJECTILE_DURATION_MS,
-    },
-    "WATER": {
-        "color": WATER_NEON,
-        "style": "water",
-        "dmg": FIRE_DMG - 1,
-        "dur": PROJECTILE_DURATION_MS + 40,
-    },
-    "WIND": {
-        "color": WIND_NEON,
-        "style": "wind",
-        "dmg": FIRE_DMG - 2,
-        "dur": PROJECTILE_DURATION_MS - 40,
-    },
-    "EARTH": {
-        "color": EARTH_NEON,
-        "style": "earth",
-        "dmg": FIRE_DMG + 2,
-        "dur": PROJECTILE_DURATION_MS + 80,
-    },
-    "DARK": {
-        "color": DARK_NEON,
-        "style": "dark",
-        "dmg": FIRE_DMG,
-        "dur": PROJECTILE_DURATION_MS + 20,
-    },
-    "LIGHTNING": {
-        "color": LTNG_NEON,
-        "style": "lightning",
-        "dmg": LIGHTNING_DMG,
-        "dur": max(280, PROJECTILE_DURATION_MS - 120),
-    },
-}
+# (주문별 색/데미지/쿨다운 프리셋은 DIFFICULTY_PROB 아래 _SPELL_DB 에 통합)
 
 
 # Magic Circle Colors - Enhanced Neon Glow
@@ -114,6 +75,95 @@ DIFFICULTY_PROB = {
     "hard": 0.60,
     "impossible": 0.80,
 }
+
+# 키보드 폴백: 숫자 1~7 → 주문 (SPELL_SLOTS 순서와 동일)
+KEYBOARD_SPELLS = {
+    pygame.K_1: "FIRE", pygame.K_2: "WATER", pygame.K_3: "WIND",
+    pygame.K_4: "EARTH", pygame.K_5: "DARK", pygame.K_6: "LIGHT",
+    pygame.K_7: "LIGHTNING",
+}
+
+# ── 주문 상성표 ──────────────────────────────────────────────────────────────
+# 공격 원소가 방어(보스) 원소에 강하면 1.5×, 약하면 0.6×, 그 외 1.0×.
+_STRONG_AGAINST = {
+    "WATER": "FIRE", "FIRE": "WIND", "WIND": "EARTH", "EARTH": "WATER",
+    "LIGHT": "DARK", "DARK": "LIGHT",
+}
+
+
+def affinity_mult(attacker: str, defender: Optional[str]) -> float:
+    """공격 원소 vs 방어 원소 데미지 배수."""
+    if not defender or attacker == defender:
+        return 1.0
+    if _STRONG_AGAINST.get(attacker) == defender:
+        return 1.5
+    if _STRONG_AGAINST.get(defender) == attacker:
+        return 0.6
+    return 1.0
+
+
+# ── 보스 페이즈 (hp 비율 하한, 원소, 공격 주기 ms, 패턴) ─────────────────────
+BOSS_PHASES = [
+    (0.66, "FIRE",  1667, "single"),
+    (0.33, "WATER", 1150, "spread3"),
+    (0.0,  "DARK",   850, "aimed"),
+]
+BOSS_TELEGRAPH_MS = 500   # 보스 시전 전 경고 시간
+
+# ── 통합 주문 레지스트리 ────────────────────────────────────────────────────
+# kind: "proj"(투사체) | "shield"(방어막).  cd: 쿨다운 ms(0=없음).
+_SPELL_DB: dict = {
+    # 기본 원소 (포즈 / 궤적)
+    "FIRE":  {"kind": "proj", "element": "FIRE",  "style": "fire",  "color": FIRE_NEON,
+              "dmg": 12, "dur": PROJECTILE_DURATION_MS,      "cd": 0,
+              "shake": (3.0, 150), "particles": (15, "spark"), "toast": ("FIRE!", YELLOW)},
+    "WATER": {"kind": "proj", "element": "WATER", "style": "water", "color": WATER_NEON,
+              "dmg": 11, "dur": PROJECTILE_DURATION_MS + 40, "cd": 0,
+              "shake": (2.5, 130), "particles": (12, "glow"), "toast": ("WATER!", BLUE)},
+    "WIND":  {"kind": "proj", "element": "WIND",  "style": "wind",  "color": WIND_NEON,
+              "dmg": 10, "dur": PROJECTILE_DURATION_MS - 40, "cd": 0,
+              "shake": (2.0, 120), "particles": (20, "spark"), "toast": ("WIND!", GREEN)},
+    "EARTH": {"kind": "proj", "element": "EARTH", "style": "earth", "color": EARTH_NEON,
+              "dmg": 14, "dur": PROJECTILE_DURATION_MS + 80, "cd": 0,
+              "shake": (4.0, 180), "particles": (10, "spark"), "toast": ("EARTH!", GREY)},
+    "DARK":  {"kind": "proj", "element": "DARK",  "style": "dark",  "color": DARK_NEON,
+              "dmg": 12, "dur": PROJECTILE_DURATION_MS + 20, "cd": 0,
+              "shake": (3.5, 160), "particles": (18, "glow"), "toast": ("DARK!", PURPLE)},
+    "LIGHT": {"kind": "shield", "element": "LIGHT", "style": "light", "color": CYAN,
+              "dmg": 0, "dur": 0, "cd": 0,
+              "shake": (2.0, 140), "particles": (25, "glow"),
+              "toast": (f"SHIELD ({SHIELD_DURATION_MS // 1000}s)", CYAN)},
+    "LIGHTNING": {"kind": "proj", "element": "LIGHTNING", "style": "lightning", "color": LTNG_NEON,
+                  "dmg": LIGHTNING_DMG, "dur": max(280, PROJECTILE_DURATION_MS - 120),
+                  "cd": LIGHTNING_COOLDOWN_MS,
+                  "shake": (5.0, 200), "particles": (30, "spark"), "toast": ("LIGHTNING!", BLUE)},
+    # 콤보 (spell_combo.py 규칙표와 1:1)
+    "STEAM":        {"kind": "proj", "element": "WATER", "style": "water", "color": (200, 230, 255),
+                     "dmg": 18, "dur": PROJECTILE_DURATION_MS + 30, "cd": 1500,
+                     "shake": (3.5, 170), "particles": (22, "glow"), "toast": ("STEAM!", BLUE)},
+    "MUD":          {"kind": "proj", "element": "EARTH", "style": "earth", "color": (150, 110, 70),
+                     "dmg": 20, "dur": PROJECTILE_DURATION_MS + 90, "cd": 1500,
+                     "shake": (4.5, 190), "particles": (14, "spark"), "toast": ("MUD!", GREY)},
+    "FLAME_BALL":   {"kind": "proj", "element": "FIRE", "style": "fire", "color": (255, 140, 40),
+                     "dmg": 26, "dur": PROJECTILE_DURATION_MS, "cd": 2500,
+                     "shake": (5.5, 210), "particles": (34, "spark"), "toast": ("FLAME BALL!", ORANGE)},
+    "ICE_SHARD":    {"kind": "proj", "element": "WATER", "style": "water", "color": (170, 240, 255),
+                     "dmg": 24, "dur": PROJECTILE_DURATION_MS - 30, "cd": 2500,
+                     "shake": (4.0, 180), "particles": (26, "glow"), "toast": ("ICE SHARD!", CYAN)},
+    "TORNADO":      {"kind": "proj", "element": "WIND", "style": "wind", "color": (160, 255, 210),
+                     "dmg": 22, "dur": PROJECTILE_DURATION_MS - 20, "cd": 2500,
+                     "shake": (4.5, 200), "particles": (30, "spark"), "toast": ("TORNADO!", GREEN)},
+    "STONE_BULLET": {"kind": "proj", "element": "EARTH", "style": "earth", "color": (210, 180, 140),
+                     "dmg": 23, "dur": PROJECTILE_DURATION_MS + 40, "cd": 2500,
+                     "shake": (5.0, 200), "particles": (16, "spark"), "toast": ("STONE BULLET!", GOLD)},
+    "BLINDNESS":    {"kind": "proj", "element": "DARK", "style": "dark", "color": (120, 90, 180),
+                     "dmg": 14, "dur": PROJECTILE_DURATION_MS + 20, "cd": 3000, "blind_ms": 3200,
+                     "shake": (3.0, 160), "particles": (20, "glow"), "toast": ("BLINDNESS!", PURPLE)},
+    "CURSE_SHOCK":  {"kind": "proj", "element": "DARK", "style": "dark", "color": (200, 60, 255),
+                     "dmg": 28, "dur": PROJECTILE_DURATION_MS + 10, "cd": 3200,
+                     "shake": (5.5, 220), "particles": (28, "glow"), "toast": ("CURSE SHOCK!", PINK)},
+}
+_SPELL_ALIASES = {"LINE": "FIRE", "CIRCLE": "LIGHT", "ZIGZAG": "LIGHTNING"}
 
 
 @dataclass
@@ -158,10 +208,23 @@ class SpellGame:
 
         # 효과/버프/쿨다운
         self.shield_time_left = 0
-        self.lightning_cd_left = 0
+        self.lightning_cd_left = 0          # HUD 표시용(=_cooldowns["LIGHTNING"])
+        self._cooldowns: dict = {}          # 주문명 → 남은 쿨다운 ms
+        self._boss_blind_left = 0           # BLINDNESS 적중 시 보스 회피 무력화 시간
 
-        # 보스 공격 주기 타이머
+        # 키보드 폴백 입력 상태
+        self._pending_kb_spell: Optional[str] = None
+        self._kb_dir: Optional[str] = None
+
+        # 궤적 주문 입력 피드백(비전 파이프라인이 매 프레임 갱신)
+        self._gesture_trail: list = []
+        self._gesture_drawing: bool = False
+
+        # 보스 공격 주기 타이머 / 페이즈
         self._boss_attack_timer = 0
+        self.boss_phase = 0
+        self.boss_element = BOSS_PHASES[0][1]
+        self._pending_boss_shots: List[dict] = []
 
         # UI 메시지
         self.message_text = ""
@@ -344,6 +407,16 @@ class SpellGame:
                     if self._btn_pause.collidepoint(event.pos):
                         self._audio.play_click()
                         self._state = "pause"
+                # 키보드 폴백(데모·테스트·접근성): 1~7 주문, ←/→ 회피
+                elif event.type == pygame.KEYDOWN:
+                    if event.key in KEYBOARD_SPELLS:
+                        self._pending_kb_spell = KEYBOARD_SPELLS[event.key]
+                    elif event.key == pygame.K_LEFT:
+                        self._kb_dir = "LEFT"
+                    elif event.key == pygame.K_RIGHT:
+                        self._kb_dir = "RIGHT"
+                elif event.type == pygame.KEYUP and event.key in (pygame.K_LEFT, pygame.K_RIGHT):
+                    self._kb_dir = None
             elif self._state == "pause":
                 if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                     for rect, action, _ in self._pause_clickables:
@@ -429,12 +502,17 @@ class SpellGame:
             self._tick_ending += 1
             return True
 
-        # 시간 갱신 및 헤드 무브먼트 먼저 반영
+        # 시간 갱신 및 헤드/키보드 무브먼트 먼저 반영 (키보드가 우선)
         dt = self.clock.tick(FPS)  # milliseconds
         self._update_timers(dt)
-        self._update_player_dodge(head_dir, dt)
+        self._update_player_dodge(self._kb_dir or head_dir, dt)
 
-        # 주문 적용(플레이어 현재 위치에서 투사체가 출발하도록 이동 이후에 적용)
+        # 주문 적용 — 비전 입력이 없으면 키보드 폴백 사용
+        if spell_name is None and self._pending_kb_spell is not None:
+            spell_name = self._pending_kb_spell
+        self._pending_kb_spell = None
+
+        # (플레이어 현재 위치에서 투사체가 출발하도록 이동 이후에 적용)
         if spell_name:
             _result = self.apply_spell(spell_name)
             if _result.applied:
@@ -474,128 +552,41 @@ class SpellGame:
         return True
 
     def apply_spell(self, spell_name: str) -> SpellResult:
+        """레지스트리(_SPELL_DB) 기반으로 주문 1건을 적용한다."""
         label = spell_name.upper()
+        label = _SPELL_ALIASES.get(label, label)
+        spec = _SPELL_DB.get(label)
+        if spec is None:
+            self._toast(f"UNKNOWN: {spell_name}", GREY)
+            return SpellResult("UNKNOWN", False, "unrecognized")
 
-        if label in ("LINE", "FIRE"):
-            p = ELEMENT_PRESETS["FIRE"]
-            self._spawn_player_projectile(
-                element="FIRE",
-                color=p["color"],
-                dmg=p["dmg"],
-                dur_ms=p["dur"],
-                style=p["style"],
-            )
-            self._spawn_cast_effect(p["color"], p["style"])
-            self._spawn_magic_circle("FIRE")
-            # 파티클 효과 추가
-            wand_x, wand_y = int(SCREEN_W * 0.61), int(SCREEN_H * 0.71)
-            self._fp.add_particles(wand_x, wand_y, 15, p["color"], "spark")
-            self._fp.add_camera_shake(3.0, 150)
-            self._toast("FIRE!", YELLOW)
-            return SpellResult("FIRE", True)
+        cd_left = self._cooldowns.get(label, 0)
+        if cd_left > 0:
+            self._toast(f"{label} (cooldown {cd_left / 1000:.1f}s)", GREY)
+            return SpellResult(label, False, "cooldown")
+        if spec["cd"] > 0:
+            self._cooldowns[label] = spec["cd"]
 
-        if label == "WATER":
-            p = ELEMENT_PRESETS["WATER"]
-            self._spawn_player_projectile(
-                element="WATER",
-                color=p["color"],
-                dmg=p["dmg"],
-                dur_ms=p["dur"],
-                style=p["style"],
-            )
-            self._spawn_cast_effect(p["color"], p["style"])
-            self._spawn_magic_circle("WATER")
-            wand_x, wand_y = int(SCREEN_W * 0.61), int(SCREEN_H * 0.71)
-            self._fp.add_particles(wand_x, wand_y, 12, p["color"], "glow")
-            self._fp.add_camera_shake(2.5, 130)
-            self._toast("WATER!", BLUE)
-            return SpellResult("WATER", True)
+        # 공통 연출
+        wand_x, wand_y = self._fp.wand_tip()
+        pcount, pkind = spec["particles"]
+        self._fp.add_particles(wand_x, wand_y, pcount, spec["color"], pkind)
+        self._fp.add_camera_shake(*spec["shake"])
+        self._spawn_cast_effect(spec["color"], spec["style"])
+        self._spawn_magic_circle(spec["element"])
+        self._toast(*spec["toast"])
 
-        if label == "WIND":
-            p = ELEMENT_PRESETS["WIND"]
-            self._spawn_player_projectile(
-                element="WIND",
-                color=p["color"],
-                dmg=p["dmg"],
-                dur_ms=p["dur"],
-                style=p["style"],
-            )
-            self._spawn_cast_effect(p["color"], p["style"])
-            self._spawn_magic_circle("WIND")
-            wand_x, wand_y = int(SCREEN_W * 0.61), int(SCREEN_H * 0.71)
-            self._fp.add_particles(wand_x, wand_y, 20, p["color"], "spark")
-            self._fp.add_camera_shake(2.0, 120)
-            self._toast("WIND!", GREEN)
-            return SpellResult("WIND", True)
-
-        if label == "EARTH":
-            p = ELEMENT_PRESETS["EARTH"]
-            self._spawn_player_projectile(
-                element="EARTH",
-                color=p["color"],
-                dmg=p["dmg"],
-                dur_ms=p["dur"],
-                style=p["style"],
-            )
-            self._spawn_cast_effect(p["color"], p["style"])
-            self._spawn_magic_circle("EARTH")
-            wand_x, wand_y = int(SCREEN_W * 0.61), int(SCREEN_H * 0.71)
-            self._fp.add_particles(wand_x, wand_y, 10, p["color"], "spark")
-            self._fp.add_camera_shake(4.0, 180)
-            self._toast("EARTH!", GREY)
-            return SpellResult("EARTH", True)
-
-        if label == "DARK":
-            p = ELEMENT_PRESETS["DARK"]
-            self._spawn_player_projectile(
-                element="DARK",
-                color=p["color"],
-                dmg=p["dmg"],
-                dur_ms=p["dur"],
-                style=p["style"],
-            )
-            self._spawn_cast_effect(p["color"], p["style"])
-            self._spawn_magic_circle("DARK")
-            wand_x, wand_y = int(SCREEN_W * 0.61), int(SCREEN_H * 0.71)
-            self._fp.add_particles(wand_x, wand_y, 18, p["color"], "glow")
-            self._fp.add_camera_shake(3.5, 160)
-            self._toast("DARK!", PURPLE)
-            return SpellResult("DARK", True)
-
-        if label in ("CIRCLE", "LIGHT"):
+        if spec["kind"] == "shield":
             self.shield_time_left = SHIELD_DURATION_MS
             self._spawn_shield_ring()
-            self._spawn_cast_effect(CYAN, "light")
-            self._spawn_magic_circle("LIGHT")
-            wand_x, wand_y = int(SCREEN_W * 0.61), int(SCREEN_H * 0.71)
-            self._fp.add_particles(wand_x, wand_y, 25, CYAN, "glow")
-            self._fp.add_camera_shake(2.0, 140)
-            self._toast(f"SHIELD ({SHIELD_DURATION_MS // 1000}s)", CYAN)
-            return SpellResult("LIGHT", True)
-
-        if label in ("ZIGZAG", "LIGHTNING"):
-            if self.lightning_cd_left <= 0:
-                p = ELEMENT_PRESETS["LIGHTNING"]
-                self.lightning_cd_left = LIGHTNING_COOLDOWN_MS
-                self._spawn_player_projectile(
-                    element="LIGHTNING",
-                    color=p["color"],
-                    dmg=p["dmg"],
-                    dur_ms=p["dur"],
-                    style=p["style"],
-                )
-                self._spawn_cast_effect(p["color"], p["style"])
-                self._spawn_magic_circle("LIGHTNING")
-                wand_x, wand_y = int(SCREEN_W * 0.61), int(SCREEN_H * 0.71)
-                self._fp.add_particles(wand_x, wand_y, 30, p["color"], "spark")
-                self._fp.add_camera_shake(5.0, 200)
-                self._toast("LIGHTNING!", BLUE)
-                return SpellResult("LIGHTNING", True)
-            self._toast("LIGHTNING (cooldown)", GREY)
-            return SpellResult("LIGHTNING", False, "cooldown")
-
-        self._toast(f"UNKNOWN: {spell_name}", GREY)
-        return SpellResult("UNKNOWN", False, "unrecognized")
+        else:
+            self._spawn_player_projectile(
+                element=spec["element"], color=spec["color"],
+                dmg=spec["dmg"], dur_ms=spec["dur"], style=spec["style"],
+            )
+            if spec.get("blind_ms"):
+                self._effects[-1]["blind_ms"] = spec["blind_ms"]
+        return SpellResult(label, True)
 
     def close(self) -> None:
         """게임을 종료하고 Pygame을 정리합니다."""
@@ -618,17 +609,62 @@ class SpellGame:
     def _update_timers(self, dt_ms: int) -> None:
         if self.shield_time_left > 0:
             self.shield_time_left = max(0, self.shield_time_left - dt_ms)
-        if self.lightning_cd_left > 0:
-            self.lightning_cd_left = max(0, self.lightning_cd_left - dt_ms)
+        for name, left in list(self._cooldowns.items()):
+            if left > 0:
+                self._cooldowns[name] = max(0, left - dt_ms)
+        self.lightning_cd_left = self._cooldowns.get("LIGHTNING", 0)
+        if self._boss_blind_left > 0:
+            self._boss_blind_left = max(0, self._boss_blind_left - dt_ms)
         if self.message_time_left > 0:
             self.message_time_left = max(0, self.message_time_left - dt_ms)
 
+    def _current_phase(self) -> Tuple[int, str, int, str]:
+        """현재 보스 HP 비율에 해당하는 (페이즈 번호, 원소, 공격주기 ms, 패턴)."""
+        ratio = self.boss_hp / float(BOSS_MAX_HP)
+        for i, (low, elem, interval, pattern) in enumerate(BOSS_PHASES):
+            if ratio > low:
+                return i + 1, elem, interval, pattern
+        last = BOSS_PHASES[-1]
+        return len(BOSS_PHASES), last[1], last[2], last[3]
+
     def _update_boss_ai(self, dt_ms: int) -> None:
-        # 매우 단순한 보스: 주기적으로 투사체 발사(피해는 명중 시점에 적용)
+        if self.boss_hp <= 0:
+            return
+        phase, elem, interval, pattern = self._current_phase()
+        if phase != self.boss_phase:
+            prev, self.boss_phase = self.boss_phase, phase
+            self.boss_element = elem
+            if prev != 0:
+                self._toast(f"BOSS PHASE {phase}: {elem}", RED)
+                self._spawn_flash(MAGIC_CIRCLE_COLORS.get(elem, WHITE))
+                self._fp.add_camera_shake(7.0, 280)
+
+        # 시전 주기마다 텔레그래프(경고) → BOSS_TELEGRAPH_MS 후 실제 발사
         self._boss_attack_timer += dt_ms
-        while self._boss_attack_timer >= BOSS_ATTACK_INTERVAL_MS:
-            self._boss_attack_timer -= BOSS_ATTACK_INTERVAL_MS
-            self._spawn_boss_projectile(dmg=BOSS_DMG)
+        while self._boss_attack_timer >= interval:
+            self._boss_attack_timer -= interval
+            self._spawn_telegraph()
+            self._pending_boss_shots.append({"delay": BOSS_TELEGRAPH_MS, "pattern": pattern})
+
+        still: List[dict] = []
+        for shot in self._pending_boss_shots:
+            shot["delay"] -= dt_ms
+            if shot["delay"] <= 0:
+                self._fire_boss_pattern(shot["pattern"])
+            else:
+                still.append(shot)
+        self._pending_boss_shots = still
+
+    def _fire_boss_pattern(self, pattern: str) -> None:
+        px, py = self.player_pos
+        if pattern == "spread3":
+            for dx in (-150, 0, 150):
+                self._spawn_boss_projectile(BOSS_DMG, end=(px + dx, py))
+        elif pattern == "aimed":
+            self._spawn_boss_projectile(BOSS_DMG + 3, end=(px, py),
+                                        dur=PROJECTILE_DURATION_MS - 120)
+        else:  # single
+            self._spawn_boss_projectile(BOSS_DMG)
 
     def _toast(self, text: str, color: Tuple[int, int, int], keep_if_longer: bool = False) -> None:
         # 간단한 메시지 시스템: 잠시 상단 중앙에 표시
@@ -649,7 +685,16 @@ class SpellGame:
         self._player_fy = float(self.player_pos[1])
         self.shield_time_left  = 0
         self.lightning_cd_left = 0
+        self._cooldowns        = {}
+        self._boss_blind_left  = 0
+        self._pending_kb_spell = None
+        self._kb_dir           = None
+        self._gesture_trail    = []
+        self._gesture_drawing  = False
         self._boss_attack_timer = 0
+        self.boss_phase        = 0
+        self.boss_element      = BOSS_PHASES[0][1]
+        self._pending_boss_shots = []
         self.message_text      = ""
         self.message_time_left = 0
         self._effects          = []
@@ -676,6 +721,11 @@ class SpellGame:
         self._player_fx = max(self._arena_min_x, min(self._arena_max_x, self._player_fx + vx * dt_s))
         self.player_pos = (int(round(self._player_fx)), self.player_pos[1])
 
+    def set_gesture_feedback(self, trail: list, drawing: bool) -> None:
+        """비전 파이프라인이 매 프레임 손끝 트레일(정규화 좌표)을 공급한다."""
+        self._gesture_trail = trail or []
+        self._gesture_drawing = bool(drawing)
+
     # ── 렌더링 ──────────────────────────────────────────────────────────────
 
     def _render(self, dt_ms: int = 16) -> None:
@@ -692,6 +742,8 @@ class SpellGame:
             difficulty=self.difficulty,
             player_offset_x=player_offset_x,
             dt_ms=dt_ms,
+            gesture_trail=self._gesture_trail,
+            gesture_drawing=self._gesture_drawing,
         )
 
     # 메뉴 렌더
@@ -703,17 +755,6 @@ class SpellGame:
             btn_settings=self._btn_settings,
             difficulty=self.difficulty,
         )
-
-    def _draw_hp_bar(self, rect: Tuple[int, int, int, int], hp: int, hp_max: int, color: Tuple[int, int, int]) -> None:
-        x, y, w, h = rect
-        pygame.draw.rect(self.screen, GREY, (x, y, w, h), border_radius=4)
-        ratio = max(0.0, min(1.0, hp / float(hp_max)))
-        pygame.draw.rect(self.screen, color, (x, y, int(w * ratio), h), border_radius=4)
-        self._blit_text(f"{hp}/{hp_max}", (x + w + 8, y - 2), WHITE)
-
-    def _blit_text(self, text: str, pos: Tuple[int, int], color: Tuple[int, int, int]) -> None:
-        surf = self.font.render(text, True, color)
-        self.screen.blit(surf, pos)
 
     # 이펙트 로직
     def _spawn_player_projectile(
@@ -744,7 +785,9 @@ class SpellGame:
             "cast_offset_x": cast_offset_x,
         })
 
-    def _spawn_boss_projectile(self, dmg: int) -> None:
+    def _spawn_boss_projectile(self, dmg: int,
+                               end: Optional[Tuple[int, int]] = None,
+                               dur: Optional[int] = None) -> None:
         self._audio.play_boss_attack()
         self._effects.append({
             "type": "proj",
@@ -752,13 +795,30 @@ class SpellGame:
             "style": "boss",
             "color": RED,
             "start": self.boss_pos,
-            "end": self.player_pos,
+            "end": end if end is not None else self.player_pos,
             "elapsed": 0,
-            "dur": PROJECTILE_DURATION_MS,
+            "dur": dur if dur is not None else PROJECTILE_DURATION_MS,
             "r": 8,
             "origin": "boss",
             "target": "player",
             "dmg": int(dmg),
+        })
+
+    def _spawn_telegraph(self) -> None:
+        """보스 시전 전 경고 링(보스 위치)."""
+        self._effects.append({
+            "type": "telegraph",
+            "elapsed": 0,
+            "dur": BOSS_TELEGRAPH_MS,
+        })
+
+    def _spawn_flash(self, color: Tuple[int, int, int], dur_ms: int = 420) -> None:
+        """화면 전체 색 파동(페이즈 전환 등 리듬 강조)."""
+        self._effects.append({
+            "type": "flash",
+            "color": color,
+            "elapsed": 0,
+            "dur": dur_ms,
         })
 
     def _spawn_cast_effect(self, color: Tuple[int, int, int], style: str) -> None:
@@ -799,7 +859,6 @@ class SpellGame:
             "type": "ring",
             "color": CYAN,
             "style": "light",
-            "center": self.player_pos,
             "elapsed": 0,
             "dur": RING_DURATION_MS,
             "r0": self.player_r + 4,
@@ -817,7 +876,7 @@ class SpellGame:
                 t = max(0.0, min(1.0, e["elapsed"] / float(e["dur"])))
 
                 if e.get("origin") == "player" and not e.get("dodge_checked", False) and 0.6 <= t <= 0.9:
-                    prob = getattr(self, "_boss_dodge_prob", 0.4)
+                    prob = 0.0 if self._boss_blind_left > 0 else getattr(self, "_boss_dodge_prob", 0.4)
                     if random.random() < prob:
                         direction = -1 if random.random() < 0.5 else 1
                         dash_px = max(90, int(self.boss_r * 2))
@@ -840,9 +899,17 @@ class SpellGame:
                         tx, ty = self.boss_pos
                         thr = self.boss_r + e.get("r", 8)
                         if math.hypot(hit_x - tx, hit_y - ty) <= thr:
-                            self._deal_boss_damage(e.get("dmg", 0))
+                            mult = affinity_mult(e.get("element", ""), self.boss_element)
+                            dmg = int(round(e.get("dmg", 0) * mult))
+                            self._deal_boss_damage(dmg)
                             self._spawn_impact_effect(e["color"], e.get("style", "fire"), True)
-                            self._toast(f"HIT -{e.get('dmg', 0)} HP", YELLOW)
+                            if e.get("blind_ms"):
+                                self._boss_blind_left = e["blind_ms"]
+                                self._toast("BOSS BLINDED!", PURPLE)
+                            else:
+                                tag = "  x1.5" if mult > 1.0 else ("  x0.6" if mult < 1.0 else "")
+                                self._toast(f"HIT -{dmg} HP{tag}",
+                                            YELLOW if mult >= 1.0 else GREY)
                         else:
                             self._spawn_impact_effect(e["color"], e.get("style", "fire"), False)
                             self._toast("MISS", GREY, keep_if_longer=True)
@@ -860,20 +927,6 @@ class SpellGame:
                 alive.append(e)
 
         self._effects = alive
-
-    def _render_effects(self) -> None:
-        for e in self._effects:
-            if e["type"] == "proj":
-                t = max(0.0, min(1.0, e["elapsed"] / float(e["dur"])) )
-                sx, sy = e["start"]
-                ex, ey = e["end"]
-                x = int(sx + (ex - sx) * t)
-                y = int(sy + (ey - sy) * t)
-                pygame.draw.circle(self.screen, e["color"], (x, y), e["r"]) 
-            elif e["type"] == "ring":
-                t = max(0.0, min(1.0, e["elapsed"] / float(e["dur"])) )
-                r = int(e["r0"] + (e["r1"] - e["r0"]) * t)
-                pygame.draw.circle(self.screen, e["color"], e["center"], r, e["w"])
 
 
 if __name__ == "__main__":
