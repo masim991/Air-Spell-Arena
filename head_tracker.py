@@ -62,6 +62,7 @@ class HeadTracker:
         refine_landmarks: bool = False,
         smooth_window: int = 5,
         draw_mesh: bool = False,
+        draw_debug: bool = False,
     ) -> None:
         self._face_mesh = mp_face_mesh.FaceMesh(
             static_image_mode=False,
@@ -71,6 +72,8 @@ class HeadTracker:
             min_tracking_confidence=min_tracking_confidence,
         )
         self.draw_mesh = draw_mesh
+        # draw_debug=False 면 프레임 복사·오버레이 드로잉을 건너뛴다(방향값만 필요할 때).
+        self.draw_debug = draw_debug or draw_mesh
 
         self._ema_offset: Optional[float]  = None
         self._prev_offset: Optional[float] = None
@@ -98,7 +101,7 @@ class HeadTracker:
             return frame, None
 
         h, w = frame.shape[:2]
-        annotated = frame.copy()
+        annotated = frame.copy() if self.draw_debug else frame
         img_rgb   = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         results   = self._face_mesh.process(img_rgb)
 
@@ -153,26 +156,25 @@ class HeadTracker:
         # ── 히스테리시스 상태 머신 ─────────────────────────────────────────────
         head_dir = self._hysteresis(smooth)
 
-        # ── 디버그 오버레이 ────────────────────────────────────────────────────
-        px  = int(nose_x * w)
-        py  = int(nose_y * h)
-        ncx = int(self._nose_cx * w)  # 적응형 중심
+        # ── 디버그 오버레이 (draw_debug 일 때만) ──────────────────────────────
+        if self.draw_debug:
+            px  = int(nose_x * w)
+            py  = int(nose_y * h)
+            ncx = int(self._nose_cx * w)  # 적응형 중심
 
-        cv2.circle(annotated, (px, py), 9, (0, 255, 255), -1)   # 코끝 마크 (밝은 파랑)
-        cv2.line(annotated, (ncx, 0), (ncx, h), (0, 220, 0), 1)  # 보정 중심 (녹색)
+            cv2.circle(annotated, (px, py), 9, (0, 255, 255), -1)   # 코끝 마크
+            cv2.line(annotated, (ncx, 0), (ncx, h), (0, 220, 0), 1)  # 보정 중심
 
-        # 현재 offset 위치 바
-        bar_x = int((self._nose_cx + smooth) * w)
-        cv2.line(annotated, (bar_x, 0), (bar_x, h), (255, 100, 0), 2)
+            bar_x = int((self._nose_cx + smooth) * w)               # 현재 offset 바
+            cv2.line(annotated, (bar_x, 0), (bar_x, h), (255, 100, 0), 2)
 
-        # ENTER 임계 라인 (±ENTER)
-        cv2.line(annotated, (int((self._nose_cx - _ENTER) * w), 0),
-                 (int((self._nose_cx - _ENTER) * w), h), (0, 180, 0), 1)
-        cv2.line(annotated, (int((self._nose_cx + _ENTER) * w), 0),
-                 (int((self._nose_cx + _ENTER) * w), h), (0, 180, 0), 1)
+            for sgn in (-1, 1):                                      # ENTER 임계 라인
+                lx = int((self._nose_cx + sgn * _ENTER) * w)
+                cv2.line(annotated, (lx, 0), (lx, h), (0, 180, 0), 1)
 
-        cv2.putText(annotated, f"HEAD: {head_dir}  off={smooth:+.3f}  fw={self._face_width:.2f}",
-                    (16, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.75, (0, 255, 255), 2, cv2.LINE_AA)
+            cv2.putText(annotated,
+                        f"HEAD: {head_dir}  off={smooth:+.3f}  fw={self._face_width:.2f}",
+                        (16, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.75, (0, 255, 255), 2, cv2.LINE_AA)
         return annotated, head_dir
 
     def close(self) -> None:

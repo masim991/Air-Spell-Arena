@@ -57,6 +57,8 @@ LTNG_NEON     = (100, 220, 255)  # Electric Blue
 PLAYER_MAX_HP = 100
 BOSS_MAX_HP   = 100
 
+DANGER_HP_RATIO = 0.28   # 이 비율 아래에서 심장박동 경고 비네트 발동
+
 # ── Audio-settings slot definitions ────────────────────────────────────────────
 _SLOT_ORDER  = ("bgm", "FIRE", "WATER", "WIND", "EARTH", "DARK", "LIGHT", "SHIELD")
 _SLOT_COLORS = {
@@ -885,6 +887,11 @@ class FPRenderer:
         # 6. HUD
         self._draw_hud(player_hp, boss_hp, shield_time_left, lightning_cd_left, difficulty)
 
+        # 6.7. 위급 시 심장박동 비네트 (HP 낮을수록 빠르고 강하게)
+        hp_ratio = player_hp / PLAYER_MAX_HP
+        if 0.0 < hp_ratio < DANGER_HP_RATIO:
+            self._draw_danger_vignette(hp_ratio)
+
         # 7. Spell message
         if message_time_left > 0 and message_text:
             self._draw_spell_message(message_text, message_color, message_time_left)
@@ -907,10 +914,29 @@ class FPRenderer:
             col = (int(30 + 210 * a), int(150 + 90 * a), 255)
             pygame.draw.line(self.screen, col, pts[i - 1], pts[i], max(1, int(1 + 4 * a)))
         head = pts[-1]
-        pygame.draw.circle(self.screen, (0, 240, 255), head, 7, 2)
+        # 리드미컬한 맥동 헤드 노드
+        puls = 0.5 + 0.5 * math.sin(self._tick * 0.32)
+        self._draw_glow(head[0], head[1], int(8 + 6 * puls), (0, 200, 255), layers=3)
+        pygame.draw.circle(self.screen, (0, 240, 255), head, int(6 + 4 * puls), 2)
+        pygame.draw.circle(self.screen, (200, 250, 255), head, 2)
         if drawing:
             lbl = self.font.render("DRAWING", True, (0, 240, 255))
-            self.screen.blit(lbl, (head[0] + 12, head[1] - 8))
+            self.screen.blit(lbl, (head[0] + 14, head[1] - 8))
+
+    def _draw_danger_vignette(self, hp_ratio: float) -> None:
+        """저체력 경고 — HP가 낮을수록 박동이 빨라지고 붉은 테두리가 짙어진다."""
+        W, H = self.W, self.H
+        sev = 1.0 - hp_ratio / DANGER_HP_RATIO           # 0(경계) → 1(빈사)
+        period = 46 - int(28 * sev)                       # 박동 주기 단축
+        beat = (math.sin(self._tick * 2 * math.pi / max(period, 1)) + 1) / 2
+        strength = 0.35 + 0.65 * sev
+        peak = int(26 + 30 * strength)
+        for w in range(1, 16):
+            fade = (1.0 - (w - 1) / 15) * beat * strength
+            if fade <= 0:
+                continue
+            c = (min(255, int(90 + peak * fade)), int(12 * fade), int(24 * fade))
+            pygame.draw.rect(self.screen, c, (w, w, W - w * 2, H - w * 2), 1)
 
     def render_ending(self, state: str, tick: int) -> None:
         """Render game_over or you_win ending screen."""
@@ -1574,6 +1600,18 @@ class FPRenderer:
                     pygame.draw.circle(self.screen, col, (cx, cy), max(3, r // 2), 1)
                 except Exception:
                     pass
+
+            elif etype == "flash":
+                # 화면 전체 색 파동 — 보스 페이즈 전환 등 리듬 강조용
+                t = max(0.0, min(1.0, e["elapsed"] / float(e["dur"])))
+                a = int(150 * (1.0 - t) ** 2)
+                if a > 0:
+                    ov = pygame.Surface((W, H), pygame.SRCALPHA)
+                    ov.fill((*e["color"], a))
+                    self.screen.blit(ov, (0, 0))
+                    band_h = max(2, int(H * 0.5 * (1.0 - t)))
+                    cy = int(H * t)
+                    pygame.draw.rect(self.screen, e["color"], (0, cy - band_h // 2, W, band_h), 2)
 
     # ── Shield vignette ────────────────────────────────────────────────────────
 

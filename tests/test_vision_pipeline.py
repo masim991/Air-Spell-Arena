@@ -41,3 +41,17 @@ def test_vision_result_defaults():
     r = VisionResult()
     assert r.trail == [] and r.drawing is False
     assert r.head_dir is None and r.annotated is None
+
+
+def test_head_tracker_skips_copy_when_no_debug():
+    """draw_debug=False 면 프레임을 복사하지 않고 그대로 반환한다(최적화 경로)."""
+    import numpy as np
+
+    from head_tracker import HeadTracker
+
+    ht = HeadTracker(draw_debug=False)
+    frame = np.zeros((48, 64, 3), dtype=np.uint8)
+    out, direction = ht.process_frame(frame)
+    ht.close()
+    assert out is frame                 # 복사 없음
+    assert direction in ("LEFT", "RIGHT", "CENTER")

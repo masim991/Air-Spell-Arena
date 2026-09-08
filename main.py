@@ -34,7 +34,10 @@ USE_HAND_TRACKING = True     # True: MediaPipe 손가락 추적, False: HSV 마�
 
 log = logging.getLogger("air_spell_arena.main")
 
-_now_s = lambda: cv2.getTickCount() / cv2.getTickFrequency()  # noqa: E731
+
+def _now_s() -> float:
+    """단조 증가 초 단위 타임스탬프(콤보 윈도 계산용)."""
+    return cv2.getTickCount() / cv2.getTickFrequency()
 
 
 def _run_hand_tracking(game: SpellGame, combo_engine: SpellComboEngine) -> None:

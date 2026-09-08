@@ -109,7 +109,7 @@ class VisionPipeline:
             min_detection_confidence=0.7,
             min_tracking_confidence=0.7,
         )
-        self._head = HeadTracker(draw_mesh=False)
+        self._head = HeadTracker(draw_mesh=False, draw_debug=False)
 
         # ── 스레드 공유 상태 ──
         self._lock = threading.Lock()
@@ -124,6 +124,7 @@ class VisionPipeline:
         self._prev_center: Optional[Point] = None
         self._trail: Deque[Tuple[float, float]] = deque(maxlen=_TRAIL_LEN)
         self._last_head_dir: Optional[str] = None
+        self._mask: Optional[np.ndarray] = None    # 디버그 마스크 버퍼(재사용)
         self._paint: Optional[np.ndarray] = None
         self._paint_count = 0
         self._frame_i = 0
@@ -332,17 +333,26 @@ class VisionPipeline:
     def _debug_layers(self, shape_hw: Tuple[int, int],
                       smoothed: Optional[Point]) -> Tuple[np.ndarray, np.ndarray]:
         h, w = shape_hw
-        mask = np.zeros((h, w), dtype=np.uint8)
-        if smoothed is not None:
-            cv2.circle(mask, smoothed, 12, 255, -1)
 
+        # 마스크: 버퍼 재사용(매 프레임 재할당 방지)
+        if self._mask is None or self._mask.shape != (h, w):
+            self._mask = np.zeros((h, w), dtype=np.uint8)
+        else:
+            self._mask.fill(0)
+        if smoothed is not None:
+            cv2.circle(self._mask, smoothed, 12, 255, -1)
+
+        # 페인트: 주기적 초기화 + 최근 트레일을 페이딩 폴리라인으로
         if self._paint is None or self._paint.shape[:2] != (h, w) \
                 or self._paint_count >= _PAINT_RESET_FRAMES:
             self._paint = np.full((h, w, 3), 255, dtype=np.uint8)
             self._paint_count = 0
-        # prev_center 는 _smooth 에서 이미 갱신되었으므로 직전 값 재구성이 불가 →
-        # 간단히 현재 점만 찍는다(궤적선은 게임 UI의 트레일로 대체 예정: Phase 3).
-        if smoothed is not None:
-            cv2.circle(self._paint, smoothed, 2, (255, 0, 0), -1)
+        pts = [(int(nx * w), int(ny * h)) for nx, ny in self._trail]
+        for i in range(1, len(pts)):
+            fade = i / len(pts)
+            cv2.line(self._paint, pts[i - 1], pts[i],
+                     (int(255 * (1 - fade)), 0, int(80 + 175 * fade)), 2)
+        if pts:
+            cv2.circle(self._paint, pts[-1], 3, (255, 0, 0), -1)
         self._paint_count += 1
-        return mask, self._paint
+        return self._mask, self._paint

@@ -53,7 +53,7 @@ EARTH_NEON = (200, 160, 100)  # Golden Earth
 DARK_NEON = (160, 80, 255)  # Deep Purple
 LTNG_NEON = (100, 220, 255)  # Electric Blue
 
-# 주문별 프리셋은 아래 _SPELL_DB 로 통합됨.
+# (주문별 색/데미지/쿨다운 프리셋은 DIFFICULTY_PROB 아래 _SPELL_DB 에 통합)
 
 
 # Magic Circle Colors - Enhanced Neon Glow
@@ -636,6 +636,8 @@ class SpellGame:
             self.boss_element = elem
             if prev != 0:
                 self._toast(f"BOSS PHASE {phase}: {elem}", RED)
+                self._spawn_flash(MAGIC_CIRCLE_COLORS.get(elem, WHITE))
+                self._fp.add_camera_shake(7.0, 280)
 
         # 시전 주기마다 텔레그래프(경고) → BOSS_TELEGRAPH_MS 후 실제 발사
         self._boss_attack_timer += dt_ms
@@ -810,6 +812,15 @@ class SpellGame:
             "dur": BOSS_TELEGRAPH_MS,
         })
 
+    def _spawn_flash(self, color: Tuple[int, int, int], dur_ms: int = 420) -> None:
+        """화면 전체 색 파동(페이즈 전환 등 리듬 강조)."""
+        self._effects.append({
+            "type": "flash",
+            "color": color,
+            "elapsed": 0,
+            "dur": dur_ms,
+        })
+
     def _spawn_cast_effect(self, color: Tuple[int, int, int], style: str) -> None:
         self._effects.append({
             "type": "cast",
@@ -848,7 +859,6 @@ class SpellGame:
             "type": "ring",
             "color": CYAN,
             "style": "light",
-            "center": self.player_pos,
             "elapsed": 0,
             "dur": RING_DURATION_MS,
             "r0": self.player_r + 4,

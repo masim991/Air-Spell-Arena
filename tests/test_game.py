@@ -97,8 +97,10 @@ def test_boss_phases_advance_with_hp():
     g._state = "playing"
     g.boss_hp = 100
     seen = set()
+    flashes = 0
     for i in range(1200):
         g._update_boss_ai(16)
+        flashes += sum(1 for e in g._effects if e["type"] == "flash" and e["elapsed"] == 0)
         g._update_effects(16)
         seen.add(g.boss_phase)
         if i % 5 == 0 and g.boss_hp > 3:
@@ -106,6 +108,15 @@ def test_boss_phases_advance_with_hp():
     g.close()
     assert seen >= {1, 2, 3}
     assert g.boss_element == BOSS_PHASES[-1][1]
+    assert flashes >= 2          # 페이즈 2·3 진입 시 화면 플래시
+
+
+def test_low_hp_renders_without_error():
+    g = SpellGame()
+    g._state = "playing"
+    g.player_hp = 8               # 심장박동 비네트 발동 구간
+    assert all(g.run_one_frame(None) for _ in range(3))
+    g.close()
 
 
 def test_telegraph_precedes_projectile():
