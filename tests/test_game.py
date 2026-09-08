@@ -134,6 +134,17 @@ def test_telegraph_precedes_projectile():
     assert not boss_proj                      # 아직 실제 발사 전
 
 
+# ── 렌더 파이프라인(시네마틱 그레이드/대기 입자/카메라 셰이크) ─────────────
+
+def test_render_pipeline_populates_atmosphere_and_grade(game):
+    game._fp.add_camera_shake(6.0, 200)      # 셰이크 스크롤 경로도 태운다
+    for _ in range(6):
+        game.run_one_frame("FIRE")
+    assert len(game._fp._motes) > 0          # 대기 입자 생성됨
+    assert game._fp._grade_cache is not None  # 그레이드 캐시 빌드됨
+    assert len(game._fp._grain_tiles) > 0
+
+
 # ── 리셋 ───────────────────────────────────────────────────────────────────
 
 def test_reset_clears_phase2_state(game):

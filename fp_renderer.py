@@ -126,6 +126,10 @@ class FPRenderer:
         self._boss_sh_surf: Optional[pygame.Surface] = None
         self._boss_hl_r: int = -1
         self._boss_hl_surf: Optional[pygame.Surface] = None
+        # 대기 파티클(재/먼지) + 시네마틱 컬러 그레이드 캐시
+        self._motes: List[dict] = []
+        self._grade_cache: Optional[pygame.Surface] = None
+        self._grain_tiles: List[pygame.Surface] = []
 
     # ── Particle System ────────────────────────────────────────────────────────
 
@@ -864,6 +868,9 @@ class FPRenderer:
         # 1. Background (with parallax + shake)
         self._draw_bg(player_offset_x)
 
+        # 1.5. 대기 입자 (재/먼지) — 배경 위, 보스 뒤
+        self._draw_atmosphere(player_offset_x)
+
         # 2. Boss (behind effects)
         self._draw_boss(boss_hp / BOSS_MAX_HP, effects, player_offset_x)
 
@@ -895,6 +902,13 @@ class FPRenderer:
         # 7. Spell message
         if message_time_left > 0 and message_text:
             self._draw_spell_message(message_text, message_color, message_time_left)
+
+        # 8. 시네마틱 그레이드(비네트·스플릿톤·그레인)
+        self._draw_grade()
+
+        # 9. 카메라 쉐이크 — 최종 합성 프레임을 픽셀 시프트(quick shake)
+        if shake_x or shake_y:
+            self.screen.scroll(int(shake_x), int(shake_y))
 
         pygame.display.flip()
 
@@ -1123,6 +1137,82 @@ class FPRenderer:
             pygame.draw.circle(self.screen, col, (cx, dy), 4)
             pygame.draw.circle(self.screen, col, (cx, dy), 6, 1)
 
+    # ── Atmosphere (부유 재/먼지) ──────────────────────────────────────────────
+
+    def _draw_atmosphere(self, player_offset_x: float = 0.0) -> None:
+        """공기 중을 떠도는 재·먼지 입자 — 깊이감/현장감(2026 트렌드: volumetric ambience)."""
+        W, H = self.W, self.H
+        if not self._motes:
+            for _ in range(46):
+                self._motes.append({
+                    "x": random.uniform(0, W),
+                    "y": random.uniform(0, H),
+                    "z": random.uniform(0.25, 1.0),          # 깊이(1=가까움)
+                    "ph": random.uniform(0, math.tau),
+                    "spd": random.uniform(4.0, 14.0),
+                })
+        for m in self._motes:
+            m["y"] -= m["spd"] * m["z"] * 0.016
+            m["ph"] += 0.03
+            if m["y"] < -4:
+                m["y"] = H + 4
+                m["x"] = random.uniform(0, W)
+            drift = math.sin(m["ph"]) * 9 * m["z"]
+            px = int(m["x"] + drift - player_offset_x * W * 0.05 * m["z"])
+            py = int(m["y"])
+            if px < -6 or px > W + 6:
+                continue
+            z = m["z"]
+            twk = 0.55 + 0.45 * math.sin(m["ph"] * 2.3)
+            # 아래쪽은 따뜻한 잔불, 위쪽은 차가운 먼지
+            warm = max(0.0, 1.0 - py / H)
+            r = int((70 + 150 * warm) * z * twk)
+            g = int((45 + 70 * warm) * z * twk)
+            b = int((60 + 40 * (1 - warm)) * z * twk)
+            rad = 1 if z < 0.55 else 2
+            if rad == 2:
+                pygame.draw.circle(self.screen, (r // 3, g // 3, b // 3), (px, py), 3)
+            pygame.draw.circle(self.screen, (min(255, r), min(255, g), min(255, b)), (px, py), rad)
+
+    # ── Cinematic color grade ─────────────────────────────────────────────────
+
+    def _draw_grade(self) -> None:
+        """비네트 + 스플릿톤 + 미세 그레인 — 필믹 컬러 그레이드(1 blit + 경량 그레인)."""
+        W, H = self.W, self.H
+        if self._grade_cache is None:
+            g = pygame.Surface((W, H), pygame.SRCALPHA)
+            # 스플릿톤: 상단 따뜻하게 / 하단 차갑게 (아주 옅게)
+            for y in range(0, H, 2):
+                t = y / H
+                warm = max(0.0, 1.0 - t * 1.6)
+                cool = max(0.0, (t - 0.4) * 1.4)
+                col = (int(30 * warm), int(10 * warm), int(24 * cool), 14)
+                pygame.draw.line(g, col, (0, y), (W, y), 2)
+            # 비네트: 가장자리를 점진적으로 어둡게
+            steps = 90
+            for i in range(steps):
+                a = int(120 * (i / steps) ** 2.4)
+                pygame.draw.rect(g, (0, 0, 0, a), (i, i, W - i * 2, H - i * 2), 1)
+            self._grade_cache = g
+            # 그레인 타일 6장 미리 생성(128×128) → 매 프레임 1장 골라 타일 blit
+            for _ in range(6):
+                tile = pygame.Surface((128, 128), pygame.SRCALPHA)
+                for _p in range(360):
+                    tx, ty = random.randint(0, 127), random.randint(0, 127)
+                    if random.random() < 0.5:
+                        tile.set_at((tx, ty), (255, 255, 255, 10))
+                    else:
+                        tile.set_at((tx, ty), (0, 0, 0, 14))
+                self._grain_tiles.append(tile)
+        self.screen.blit(self._grade_cache, (0, 0))
+        # 필름 그레인 — 캐시 타일을 프레임마다 위상 이동하며 타일링
+        tile = self._grain_tiles[self._tick % len(self._grain_tiles)]
+        ox = -(self._tick * 7 % 128)
+        oy = -(self._tick * 3 % 128)
+        for gy in range(oy, H, 128):
+            for gx in range(ox, W, 128):
+                self.screen.blit(tile, (gx, gy))
+
     # ── Boss ───────────────────────────────────────────────────────────────────
 
     def _draw_boss(self, hp_ratio: float, effects: List[dict], player_offset_x: float = 0.0) -> None:
@@ -1203,6 +1293,15 @@ class FPRenderer:
             if lr > 0:
                 fc = (255, 240, 210) if is_hit and lr == R - 49 else lc
                 pygame.draw.circle(self.screen, fc, (cx + ox, cy + oy), lr)
+
+        # ── 표피하 산란(subsurface) 코어 — 느리게 호흡하는 내부 발광 ───────────
+        breathe = 0.45 + 0.55 * (0.5 + 0.5 * math.sin(self._tick * 0.03))
+        ss_r = int(R * (0.42 + 0.10 * breathe))
+        ss_col = aura_col if enraged else (int(120 + 90 * breathe), int(30 + 20 * breathe), 24)
+        ss = pygame.Surface((ss_r * 2, ss_r * 2), pygame.SRCALPHA)
+        pygame.draw.circle(ss, (*ss_col, int(70 + 60 * breathe)), (ss_r, ss_r), ss_r)
+        pygame.draw.circle(ss, (*ss_col, int(40 + 40 * breathe)), (ss_r, ss_r), int(ss_r * 0.6))
+        self.screen.blit(ss, (cx - ss_r - 14, cy - ss_r - 16), special_flags=pygame.BLEND_RGBA_ADD)
 
         # 외곽 림 라이트 (뒷면 역광)
         if enraged:
@@ -1318,6 +1417,16 @@ class FPRenderer:
                 fr   = max(1, 4 - j // 3)
                 fc_t = tuple(int(c * (1.0 - jt * 0.85)) for c in aura_col)
                 pygame.draw.circle(self.screen, fc_t, (tx_d, ty_d), fr)  # type: ignore
+
+        # ── 상승하는 잔불/재 (열원 현장감) ─────────────────────────────────────
+        ash_n = 14 if enraged else 9
+        for i in range(ash_n):
+            life = ((self._tick * 1.7 + i * 37) % 90) / 90.0        # 0→1 반복
+            ax = cx + int((i * 53 % (R * 2)) - R + 10 * math.sin(self._tick * 0.05 + i))
+            ay = cy + int(R * 0.4 - life * (R * 1.9))
+            fade = 1.0 - life
+            ec = (int(255 * fade), int((120 if enraged else 70) * fade), int(20 * fade))
+            pygame.draw.circle(self.screen, ec, (ax, ay), 1 if life > 0.5 else 2)
 
         # ── 피격 충격파 링 ────────────────────────────────────────────────────
         if is_hit:
@@ -1452,6 +1561,15 @@ class FPRenderer:
             gx = int(wx_b + (wx_t - wx_b) * gt)
             gy = int(wy_b + (wy_t - wy_b) * gt)
             pygame.draw.line(self.screen, (60, 40, 14), (gx, gy), (gx - 3, gy + 1), 1)
+        # 이동하는 정반사 하이라이트 (광택 래커 느낌 — 표면 재질감)
+        st = 0.5 + 0.5 * math.sin(self._tick * 0.08)
+        sh0 = st * 0.7
+        sgx0 = int(wx_b + (wx_t - wx_b) * sh0)
+        sgy0 = int(wy_b + (wy_t - wy_b) * sh0)
+        sgx1 = int(wx_b + (wx_t - wx_b) * (sh0 + 0.16))
+        sgy1 = int(wy_b + (wy_t - wy_b) * (sh0 + 0.16))
+        pygame.draw.line(self.screen, (180, 150, 90), (sgx0 - 4, sgy0 - 6), (sgx1 - 4, sgy1 - 6), 2)
+        pygame.draw.line(self.screen, (245, 225, 175), (sgx0 - 4, sgy0 - 6), (sgx1 - 4, sgy1 - 6), 1)
 
         # ── 메탈 밴드 ────────────────────────────────────────────────────────
         for k in range(3):
@@ -1489,13 +1607,23 @@ class FPRenderer:
             for px, py in gem_pts
         ]
         pygame.draw.polygon(self.screen, gem_core, igem)
+        # 내부 굴절 카우스틱 (움직이는 빛줄기)
+        cau = math.sin(self._tick * 0.13)
+        pygame.draw.line(self.screen, gem_hot,
+                         (int(wx_t - gr * 0.6), int(wy_t + gr * 0.5 * cau)),
+                         (int(wx_t + gr * 0.6), int(wy_t - gr * 0.5 * cau)), 1)
         # 페이셋 라인
         for i, gp in enumerate(gem_pts):
             pygame.draw.line(self.screen, gem_hot, gp, igem[i], 1)
+        # 프레넬 림 (가장자리 밝은 얇은 테두리)
+        pygame.draw.polygon(self.screen, (235, 225, 255), gem_pts, 1)
         pygame.draw.polygon(self.screen, gem_hot, gem_pts, 1)
         # 젬 하이라이트
         pygame.draw.circle(self.screen, (255, 255, 255), (wx_t - 4, wy_t - 5), 3)
         pygame.draw.circle(self.screen, (210, 190, 255), (wx_t + 3, wy_t + 3), 2)
+        # 젬이 손을 비추는 반사광 (접촉 바운스 라이트)
+        bounce = tuple(min(255, int(c * 0.5)) for c in gem_col)
+        self._draw_glow(hx - 2, hy - 4, 16, bounce, layers=3)
 
         # ── 정방향 궤도 파티클 (5개) ─────────────────────────────────────────
         for k in range(5):
