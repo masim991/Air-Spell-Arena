@@ -153,11 +153,16 @@ class AudioManager:
     def _mk_sound(self, filename: Optional[str]) -> Optional[pygame.mixer.Sound]:
         if not filename:
             return None
-        # custom 모드: custom 폴더 우선 → 없으면 기본 폴더
+        # 파일 검색 순서: use_custom 모드에 따라 우선순위 결정, 없으면 fallback
         candidates: list = []
         if self._use_custom:
+            # custom 모드: custom 폴더 우선 → 기본 폴더
             candidates.append(self._custom_dir / filename)
-        candidates.append(self._dir / filename)
+            candidates.append(self._dir / filename)
+        else:
+            # 기본 모드: 기본 폴더 우선 → custom 폴더 (fallback)
+            candidates.append(self._dir / filename)
+            candidates.append(self._custom_dir / filename)
 
         for path in candidates:
             if path.exists():
@@ -227,12 +232,23 @@ class AudioManager:
             self.stop_bgm()
             return
         try:
-            # custom 모드: custom 폴더 우선 → 없으면 기본 폴더
+            # 파일 검색 순서: use_custom 모드에 따라 우선순위 결정, 없으면 fallback
             bgm_candidates = []
             if self._use_custom:
+                # custom 모드: custom 폴더 우선 → 기본 폴더
                 bgm_candidates.append(self._custom_dir / fn)
-            bgm_candidates.append(self._dir / fn)
-            path = next((p for p in bgm_candidates if p.exists()), bgm_candidates[-1])
+                bgm_candidates.append(self._dir / fn)
+            else:
+                # 기본 모드: 기본 폴더 우선 → custom 폴더 (fallback)
+                bgm_candidates.append(self._dir / fn)
+                bgm_candidates.append(self._custom_dir / fn)
+            
+            path = next((p for p in bgm_candidates if p.exists()), None)
+            if path is None:
+                tried = " | ".join(str(p) for p in bgm_candidates)
+                print(f"[AudioManager] BGM 파일 없음 ({fn}) — 시도: {tried}")
+                return
+            
             pygame.mixer.music.load(str(path))
             pygame.mixer.music.set_volume(self._volumes.get("bgm", _DEFAULT_VOLUME) / 100)
             pygame.mixer.music.play(-1)

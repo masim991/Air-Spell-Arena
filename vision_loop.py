@@ -162,13 +162,20 @@ def run_vision_loop(
         cv2.circle(mask, smoothed, 12, 255, -1)
 
     # 5) 페인트 캔버스: 이전 center와 현재 center를 선으로 연결
+    # 메모리 최적화: 주기적으로 캔버스 초기화 (300프레임마다)
     paint = getattr(run_vision_loop, "_paint", None)
     prev_center = getattr(run_vision_loop, "_prev_center", None)
-    if paint is None or paint.shape[:2] != (h, w):
+    paint_frame_count = getattr(run_vision_loop, "_paint_frame_count", 0)
+    
+    if paint is None or paint.shape[:2] != (h, w) or paint_frame_count >= 300:
         paint = np.full((h, w, 3), 255, dtype=np.uint8)
+        paint_frame_count = 0
+    
     if prev_center is not None and smoothed is not None:
         cv2.line(paint, prev_center, smoothed, (255, 0, 0), 2)
+    
     setattr(run_vision_loop, "_paint", paint)
+    setattr(run_vision_loop, "_paint_frame_count", paint_frame_count + 1)
     setattr(run_vision_loop, "_prev_center", smoothed)
 
     # 6) 디버그 창 표시 및 종료 키
@@ -181,3 +188,30 @@ def run_vision_loop(
         return False
 
     return True
+
+
+def cleanup_vision_loop() -> None:
+    """vision_loop에서 사용한 MediaPipe 및 OpenCV 리소스를 정리합니다."""
+    hands = getattr(run_vision_loop, "_hands", None)
+    if hands is not None:
+        try:
+            hands.close()
+        except Exception:
+            pass
+        setattr(run_vision_loop, "_hands", None)
+    
+    htracker = getattr(run_vision_loop, "_head_tracker", None)
+    if htracker is not None:
+        try:
+            htracker.close()
+        except Exception:
+            pass
+        setattr(run_vision_loop, "_head_tracker", None)
+    
+    # 전역 상태 초기화
+    setattr(run_vision_loop, "_ema_center", None)
+    setattr(run_vision_loop, "_prev_center", None)
+    setattr(run_vision_loop, "_paint", None)
+    setattr(run_vision_loop, "_paint_frame_count", 0)
+    setattr(run_vision_loop, "_last_pose_spell", None)
+    setattr(run_vision_loop, "_last_head_dir", None)

@@ -6,17 +6,17 @@
   "EARTH": "Earth.mp3",
   "DARK": "Dark.mp3",
   "LIGHT": "Light.mp3",
-  "LIGHTNING": "Light.mp3",
+  "LIGHTNING": null,
   "use_custom": false,
   "custom": {
     "bgm": null,
-    "FIRE": "여자.mp3",
-    "WATER": "옵.mp3",
-    "WIND": "완전.mp3",
+    "FIRE": "강남.mp3",
+    "WATER": "머리 푸는.mp3",
+    "WIND": "여자.mp3",
     "EARTH": "옵.mp3",
-    "DARK": "에에.mp3",
-    "LIGHT": "강남.mp3",
-    "LIGHTNING": "Damm girl.mp3"
+    "DARK": "완전.mp3",
+    "LIGHT": "Damm girl.mp3",
+    "LIGHTNING": "에에.mp3"
   },
   "volumes": {
     "bgm": 50,
