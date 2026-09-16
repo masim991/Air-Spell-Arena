@@ -41,84 +41,113 @@ def _now_s() -> float:
 
 
 def _run_hand_tracking(game: SpellGame, combo_engine: SpellComboEngine) -> None:
-    """VisionPipeline(워커 스레드) 기반 메인 루프."""
-    pipeline = VisionPipeline(CAMERA_INDEX, show_debug=SHOW_DEBUG_WINDOWS)
+    """VisionPipeline(워커 스레드) 기반 메인 루프.
+
+    카메라/MediaPipe 초기화가 실패해도 게임을 종료하지 않는다 — 메뉴는 계속 뜨고,
+    타이틀 화면의 "PLAY WITHOUT CAMERA" 버튼이나 인게임 키보드 폴백으로 계속 진행할 수 있다.
+    """
+    pipeline: Optional[VisionPipeline] = VisionPipeline(CAMERA_INDEX, show_debug=SHOW_DEBUG_WINDOWS)
     pipeline.start()
     if pipeline.failed:
-        log.error("비전 파이프라인 시작 실패 — 종료합니다.")
-        return
+        log.warning("비전 파이프라인 시작 실패 — 카메라 없이 키보드 폴백으로 진행합니다.")
+        pipeline.close()
+        pipeline = None
 
     last_head_dir: Optional[str] = None
     running = True
     try:
         while running:
-            if pipeline.failed:
-                log.error("비전 파이프라인이 중단되었습니다 — 게임을 종료합니다.")
-                break
+            if pipeline is not None and pipeline.failed:
+                log.warning("비전 파이프라인이 중단되었습니다 — 키보드 폴백으로 전환합니다.")
+                pipeline.close()
+                pipeline = None
+                last_head_dir = None
 
-            # 1) 주문 이벤트 소비: 포즈/궤적 모두 콤보 엔진 경유(최신 결과 채택)
             spell_name: Optional[str] = None
-            for _, name in pipeline.drain_spells():
-                spell_name = combo_engine.push_basic_spell(name, _now_s())
+            if pipeline is not None:
+                # 1) 주문 이벤트 소비: 포즈/궤적 모두 콤보 엔진 경유(최신 결과 채택)
+                for _, name in pipeline.drain_spells():
+                    spell_name = combo_engine.push_basic_spell(name, _now_s())
 
-            # 2) 최신 비전 결과 소비(연속 신호: head_dir, 디버그 프레임)
-            res = pipeline.poll_result()
-            if res is not None:
-                last_head_dir = res.head_dir
-                game.set_gesture_feedback(res.trail, res.drawing)
-                if SHOW_DEBUG_WINDOWS and res.annotated is not None:
-                    cv2.imshow("Tracking", res.annotated)
-                    if res.mask is not None:
-                        cv2.imshow("Mask", res.mask)
-                    if res.paint is not None:
-                        cv2.imshow("Paint", res.paint)
-                    key = cv2.waitKey(1) & 0xFF
-                    if key == ord("q"):
-                        break
-                    if key == ord("c"):          # 'c' → 머리 방향 정면 재보정
-                        pipeline.recenter_head()
-                        log.info("머리 방향 기준점 재보정")
+                # 2) 최신 비전 결과 소비(연속 신호: head_dir, 디버그 프레임)
+                res = pipeline.poll_result()
+                if res is not None:
+                    last_head_dir = res.head_dir
+                    game.set_gesture_feedback(res.trail, res.drawing)
+                    if SHOW_DEBUG_WINDOWS and res.annotated is not None:
+                        cv2.imshow("Tracking", res.annotated)
+                        if res.mask is not None:
+                            cv2.imshow("Mask", res.mask)
+                        if res.paint is not None:
+                            cv2.imshow("Paint", res.paint)
+                        key = cv2.waitKey(1) & 0xFF
+                        if key == ord("q"):
+                            break
+                        if key == ord("c"):          # 'c' → 머리 방향 정면 재보정
+                            pipeline.recenter_head()
+                            log.info("머리 방향 기준점 재보정")
 
             # 3) 게임 1프레임(내부에서 clock.tick(60) — 유일한 프레임 리미터)
             running = game.run_one_frame(spell_name, head_dir=last_head_dir)
+
+            # 4) 타이틀 화면에서 "PLAY WITHOUT CAMERA"를 누르면 카메라를 해제한다
+            if game.consume_no_camera_request() and pipeline is not None:
+                pipeline.close()
+                pipeline = None
+                last_head_dir = None
+                cv2.destroyAllWindows()
     except KeyboardInterrupt:
         pass
     finally:
-        pipeline.close()
+        if pipeline is not None:
+            pipeline.close()
 
 
 def _run_hsv_tracking(game: SpellGame, combo_engine: SpellComboEngine) -> None:
-    """AirCanvas(HSV 마커) 기반 메인 루프 — 단일 스레드."""
-    canvas = AirCanvas(camera_index=CAMERA_INDEX, show_trackbars=SHOW_TRACKBARS)
+    """AirCanvas(HSV 마커) 기반 메인 루프 — 단일 스레드.
+
+    카메라를 열 수 없어도 종료하지 않고 키보드 폴백으로 계속 진행한다.
+    """
+    canvas: Optional[AirCanvas] = AirCanvas(camera_index=CAMERA_INDEX, show_trackbars=SHOW_TRACKBARS)
+    if not canvas.opened:
+        log.warning("카메라를 열 수 없습니다 — 키보드 폴백으로 진행합니다.")
+        canvas.release()
+        canvas = None
     traj_buffer = TrajectoryBuffer(TrajectoryConfig())
     analyzer = GestureAnalyzer()
     running = True
     try:
         while running:
-            data = canvas.update()
-            if data is None:
-                break  # 'q' 또는 카메라 오류
-
-            traj_buffer.update(data.center)
             spell_name: Optional[str] = None
-            traj = traj_buffer.poll_last_closed()
-            if traj is not None:
-                basic = analyzer.classify(traj)
-                if basic != "UNKNOWN":
-                    spell_name = combo_engine.push_basic_spell(basic, _now_s())
+            if canvas is not None:
+                data = canvas.update()
+                if data is None:
+                    break  # 'q' 또는 카메라 오류
 
-            if SHOW_DEBUG_WINDOWS:
-                cv2.imshow("Tracking", data.frame)
-                cv2.imshow("Paint", data.paint)
-                cv2.imshow("Mask", data.mask)
-                if cv2.waitKey(1) & 0xFF == ord("q"):
-                    break
+                traj_buffer.update(data.center)
+                traj = traj_buffer.poll_last_closed()
+                if traj is not None:
+                    basic = analyzer.classify(traj)
+                    if basic != "UNKNOWN":
+                        spell_name = combo_engine.push_basic_spell(basic, _now_s())
+
+                if SHOW_DEBUG_WINDOWS:
+                    cv2.imshow("Tracking", data.frame)
+                    cv2.imshow("Paint", data.paint)
+                    cv2.imshow("Mask", data.mask)
+                    if cv2.waitKey(1) & 0xFF == ord("q"):
+                        break
 
             running = game.run_one_frame(spell_name, head_dir=None)
+
+            if game.consume_no_camera_request() and canvas is not None:
+                canvas.release()
+                canvas = None
     except KeyboardInterrupt:
         pass
     finally:
-        canvas.release()
+        if canvas is not None:
+            canvas.release()
 
 
 def run() -> int:

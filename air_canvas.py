@@ -112,6 +112,11 @@ class AirCanvas:
     # ── Public API ─────────────────────────────────────────────────────────────
 
     @property
+    def opened(self) -> bool:
+        """카메라 장치를 실제로 열 수 있었는지 여부."""
+        return self._cap.isOpened()
+
+    @property
     def color_index(self) -> int:
         """Currently active drawing colour index (0-3)."""
         return self._color_idx

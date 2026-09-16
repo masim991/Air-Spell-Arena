@@ -239,6 +239,12 @@ class SpellGame:
         self._btn_exit     = pygame.Rect(_cx - 95,  _by + 76,   190, 46)
         self._btn_guide    = pygame.Rect(_cx - 175, _by + 142,  160, 42)
         self._btn_settings = pygame.Rect(_cx + 15,  _by + 142,  160, 42)
+        self._btn_no_camera = pygame.Rect(_cx - 140, SCREEN_H * 3 // 4 + 74, 280, 34)
+
+        # 입력 모드: 'camera' | 'keyboard'. main.py가 이 플래그를 보고
+        # 노카메라 요청이 오면 비전 파이프라인을 정리한다.
+        self._input_mode = "camera"
+        self._no_camera_requested = False
 
         # 인게임 일시정지
         self._btn_pause = pygame.Rect(SCREEN_W - 68, 10, 58, 28)
@@ -340,6 +346,13 @@ class SpellGame:
                     mx, my = event.pos
                     if self._btn_start.collidepoint(mx, my):
                         self._audio.play_click()
+                        self._input_mode = "camera"
+                        self._intro_tick = 0; self._intro_chars_shown = 0; self._intro_start_ms = 0
+                        self._state = "intro"
+                    elif self._btn_no_camera.collidepoint(mx, my):
+                        self._audio.play_click()
+                        self._input_mode = "keyboard"
+                        self._no_camera_requested = True
                         self._intro_tick = 0; self._intro_chars_shown = 0; self._intro_start_ms = 0
                         self._state = "intro"
                     elif self._btn_exit.collidepoint(mx, my):
@@ -588,6 +601,12 @@ class SpellGame:
                 self._effects[-1]["blind_ms"] = spec["blind_ms"]
         return SpellResult(label, True)
 
+    def consume_no_camera_request(self) -> bool:
+        """True를 한 번만 반환한다 — main.py가 이 시점에 비전 파이프라인을 정리한다."""
+        requested = self._no_camera_requested
+        self._no_camera_requested = False
+        return requested
+
     def close(self) -> None:
         """게임을 종료하고 Pygame을 정리합니다."""
         self._audio.close()
@@ -689,6 +708,8 @@ class SpellGame:
         self._boss_blind_left  = 0
         self._pending_kb_spell = None
         self._kb_dir           = None
+        self._input_mode       = "camera"
+        self._no_camera_requested = False
         self._gesture_trail    = []
         self._gesture_drawing  = False
         self._boss_attack_timer = 0
@@ -753,6 +774,7 @@ class SpellGame:
             btn_exit=self._btn_exit,
             btn_guide=self._btn_guide,
             btn_settings=self._btn_settings,
+            btn_no_camera=self._btn_no_camera,
             difficulty=self.difficulty,
         )
 

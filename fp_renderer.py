@@ -17,24 +17,32 @@ from typing import List, Optional, Sequence, Tuple
 
 import pygame
 
-# ── Modern Neon/Cyberpunk Colour Palette (2026 Gaming Trend) ──────────────────
-# Inspired by Valorant, Apex Legends, Genshin Impact
+# ── Minimal Arcade Chrome Palette ──────────────────────────────────────────────
+# Menu/HUD/HUD-frame chrome is monochrome + a single danger accent — no rainbow
+# neon. Spell/element colours below stay vivid; they're gameplay signal, not chrome.
 BLACK    = (0,   0,   0)
 WHITE    = (255, 255, 255)
 
-# Background - Deep dark with subtle purple tint
-BG_TOP   = (8,   4,  18)
-BG_MID   = (12,  6,  24)
-BG_BOT   = (6,   3,  14)
-FLOOR_C  = (18,  10,  32)
+# Background - neutral near-black, no colour tint
+BG_TOP   = (10,  10,  12)
+BG_MID   = (14,  14,  16)
+BG_BOT   = (7,   7,   8)
+FLOOR_C  = (20,  20,  22)
 
-# Runes - Vibrant neon purple/magenta
-RUNE_DIM = (60,  30,  100)
-RUNE_GLO = (180, 80,  255)
+# Ambient ember particles (menu/atmosphere) - grayscale, not coloured runes
+RUNE_DIM = (70,  70,  78)
+RUNE_GLO = (225, 225, 235)
 
-# UI Colors - Bright, saturated, neon-inspired
+# Chrome tokens - the only colours used for menu/HUD frame, buttons, text
+TEXT_PRIMARY   = (232, 232, 238)   # off-white body/label text
+TEXT_SECONDARY = (150, 150, 160)   # dim secondary text
+HAIRLINE       = (95,  95,  104)   # thin borders/dividers
+ACCENT         = (255, 255, 255)   # primary CTA (hero buttons, focus)
+DANGER         = (230, 64,  64)    # exit/danger actions only
+
+# UI Colors - kept for gameplay signal (toasts, slot swatches, spell effects)
 RED      = (255, 70,  100)   # Neon Pink-Red
-GREEN    = (80,  255, 150)   # Neon Mint Green  
+GREEN    = (80,  255, 150)   # Neon Mint Green
 YELLOW   = (255, 230, 60)    # Electric Yellow
 BLUE     = (80,  150, 255)   # Bright Sky Blue
 CYAN     = (0,   240, 255)   # Electric Cyan
@@ -229,12 +237,12 @@ class FPRenderer:
 
         self.screen.fill((0, 0, 0))
 
-        # 은은한 배경 파티클
+        # 은은한 배경 파티클 (중립 그레이 — 크롬은 무채색)
         for k in range(5):
             a  = tick * 0.007 + k * math.pi * 2 / 5
             px = int(W // 2 + math.cos(a) * (180 + k * 30))
             py = int(H // 2 + math.sin(a * 0.6) * (55 + k * 18))
-            rc = self._pulse_color((10, 10, 50), (40, 30, 100), tick + k * 20, 100)
+            rc = self._pulse_color(RUNE_DIM, RUNE_GLO, tick + k * 20, 100)
             pygame.draw.circle(self.screen, rc, (px, py), 1 + k % 2)
 
         # 수평 스캔라인 (극적 효과)
@@ -256,42 +264,41 @@ class FPRenderer:
                 age       = chars_shown - i
                 glow_frac = max(0.0, 1.0 - age * 0.06)
 
-                sh = tf.render(c, True, (0, 0, 30))
+                sh = tf.render(c, True, (0, 0, 0))
                 sh.set_alpha(150)
                 self.screen.blit(sh, (x + 3, ty + 3))
 
-                col = self._pulse_color((140, 210, 255), (240, 255, 255), tick + i * 11, 65)
-                self.screen.blit(tf.render(c, True, col), (x, ty))
+                self.screen.blit(tf.render(c, True, TEXT_PRIMARY), (x, ty))
 
                 if glow_frac > 0.04:
-                    gc = (int(60 * glow_frac), int(160 * glow_frac), int(255 * glow_frac))
-                    gs = tf.render(c, True, gc)
-                    gs.set_alpha(int(200 * glow_frac))
+                    gs = tf.render(c, True, WHITE)
+                    gs.set_alpha(int(140 * glow_frac))
                     self.screen.blit(gs, (x - 1, ty - 1))
             x += cw
 
         # ── PLAY / EXIT 버튼 (전체 공개 후 표시) ──────────────────────────
         if btn_play is not None:
-            self._draw_hero_button(btn_play, "PLAY", CYAN)
+            self._draw_hero_button(btn_play, "PLAY")
         if btn_exit is not None:
-            self._draw_button(btn_exit, "EXIT", RED)
+            self._draw_button(btn_exit, "EXIT", danger=True)
 
         pygame.display.flip()
 
     def render_menu(
         self,
-        btn_start:    pygame.Rect,
-        btn_exit:     pygame.Rect,
-        btn_guide:    pygame.Rect,
-        btn_settings: pygame.Rect,
-        difficulty:   str,
+        btn_start:     pygame.Rect,
+        btn_exit:      pygame.Rect,
+        btn_guide:     pygame.Rect,
+        btn_settings:  pygame.Rect,
+        btn_no_camera: pygame.Rect,
+        difficulty:    str,
     ) -> None:
         self._tick += 1
         W, H = self.W, self.H
 
         self._draw_bg()
 
-        # ── Ambient floating rune particles ────────────────────────────────
+        # ── Ambient floating ember particles (grayscale, static chrome) ────
         for k in range(8):
             a   = self._tick * 0.012 + k * math.pi * 2 / 8
             px_ = W // 2 + int(math.cos(a) * (180 + k * 18))
@@ -299,53 +306,53 @@ class FPRenderer:
             rc  = self._pulse_color(RUNE_DIM, RUNE_GLO, self._tick + k * 22, 70)
             pygame.draw.circle(self.screen, rc, (px_, py_), 2 + k % 2)
 
-        # ── Title (game bold font, double shadow + glow) ────────────────────
-        glow_c = self._pulse_color((140, 70, 255), (230, 160, 255), self._tick, 90)
-        tf     = self.font_game_title
-        ty     = H // 4 - 10
+        # ── Title (flat off-white, single soft shadow — no colour pulse) ───
+        tf = self.font_game_title
+        ty = H // 4 - 10
 
-        for dx, dy, alpha in ((4, 4, 35), (2, 2, 80)):
-            sh_t = tf.render("AIR SPELL ARENA", True, (0, 0, 0))
-            sh_t.set_alpha(alpha)
-            self.screen.blit(sh_t, sh_t.get_rect(center=(W // 2 + dx, ty + dy)))
+        sh_t = tf.render("AIR SPELL ARENA", True, (0, 0, 0))
+        sh_t.set_alpha(90)
+        self.screen.blit(sh_t, sh_t.get_rect(center=(W // 2 + 3, ty + 3)))
 
-        title_s = tf.render("AIR SPELL ARENA", True, glow_c)
+        title_s = tf.render("AIR SPELL ARENA", True, TEXT_PRIMARY)
         self.screen.blit(title_s, title_s.get_rect(center=(W // 2, ty)))
 
         # ── Subtitle ────────────────────────────────────────────────────────
-        sub_c = self._pulse_color((80, 70, 110), (160, 140, 200), self._tick, 120)
         sub_f = self.font_game_tab
-        sub_s = sub_f.render("*  Battle the Arcane Boss with Hand Spells  *", True, sub_c)
+        sub_s = sub_f.render("*  Battle the Arcane Boss with Hand Spells  *", True, TEXT_SECONDARY)
         self.screen.blit(sub_s, sub_s.get_rect(center=(W // 2, ty + 56)))
 
         self._draw_rune_separator(ty + 80)
 
-        # ── START button (hero — full width, bright) ───────────────────────
-        self._draw_hero_button(btn_start, "START  GAME", CYAN)
+        # ── START button (hero — full width, primary CTA) ──────────────────
+        self._draw_hero_button(btn_start, "START  GAME")
 
-        # ── EXIT button (secondary) ────────────────────────────────────────
-        self._draw_button(btn_exit, "EXIT", RED)
+        # ── EXIT button (danger) ────────────────────────────────────────────
+        self._draw_button(btn_exit, "EXIT", danger=True)
 
         # ── GUIDE + SETTINGS (small, side by side) ─────────────────────────
-        self._draw_button(btn_guide,    "SPELL GUIDE", GOLD,   self.font_game_tab)
-        self._draw_button(btn_settings, "SETTINGS",    PURPLE, self.font_game_tab)
+        self._draw_button(btn_guide,    "SPELL GUIDE", self.font_game_tab)
+        self._draw_button(btn_settings, "SETTINGS",    self.font_game_tab)
 
-        # ── Difficulty badge pill ───────────────────────────────────────────
+        # ── PLAY WITHOUT CAMERA (accessibility / no motion-tracking mode) ──
+        self._draw_button(btn_no_camera, "PLAY WITHOUT CAMERA", self.font_kor_small)
+
+        # ── Difficulty badge pill (flat chrome, tier colour on text only) ──
         diff_colors = {"easy": GREEN, "normal": YELLOW, "hard": ORANGE, "impossible": RED}
         dc   = diff_colors.get(difficulty, WHITE)
         dy_  = H * 3 // 4 + 6
         pill_w, pill_h = 230, 34
         pill = pygame.Surface((pill_w, pill_h), pygame.SRCALPHA)
-        pill.fill((dc[0] // 8, dc[1] // 8, dc[2] // 8, 200))
+        pill.fill((255, 255, 255, 14))
         self.screen.blit(pill, (W // 2 - pill_w // 2, dy_ - pill_h // 2))
-        pygame.draw.rect(self.screen, dc,
-                         (W // 2 - pill_w // 2, dy_ - pill_h // 2, pill_w, pill_h), 2, border_radius=17)
+        pygame.draw.rect(self.screen, HAIRLINE,
+                         (W // 2 - pill_w // 2, dy_ - pill_h // 2, pill_w, pill_h), 1, border_radius=17)
         diff_s = self.font_game_tab.render(f"DIFFICULTY :  {difficulty.upper()}", True, dc)
         self.screen.blit(diff_s, diff_s.get_rect(center=(W // 2, dy_)))
 
-        # ── Keyboard shortcut key-caps ──────────────────────────────────────
+        # ── Keyboard shortcut key-caps (flat chrome, tier colour on digit) ──
         keys = [("1", "Easy", GREEN), ("2", "Normal", YELLOW),
-                ("3", "Hard", ORANGE), ("4", "Impossl", RED), ("G", "Guide", GOLD)]
+                ("3", "Hard", ORANGE), ("4", "Impossl", RED), ("G", "Guide", TEXT_SECONDARY)]
         _kslot = 110
         total_w = len(keys) * _kslot
         kx0 = W // 2 - total_w // 2
@@ -355,13 +362,13 @@ class FPRenderer:
             # key cap box
             cap = pygame.Rect(kx, ky - 11, 22, 22)
             cap_bg = pygame.Surface((22, 22), pygame.SRCALPHA)
-            cap_bg.fill((k_col[0] // 6, k_col[1] // 6, k_col[2] // 6, 200))
+            cap_bg.fill((255, 255, 255, 14))
             self.screen.blit(cap_bg, cap.topleft)
-            pygame.draw.rect(self.screen, k_col, cap, 1, border_radius=3)
+            pygame.draw.rect(self.screen, HAIRLINE, cap, 1, border_radius=3)
             ks = self.font_game_tab.render(k_lbl, True, k_col)
             self.screen.blit(ks, ks.get_rect(center=cap.center))
             # label next to key
-            ns = self.font.render(k_name, True, tuple(c // 2 + 40 for c in k_col))  # type: ignore
+            ns = self.font.render(k_name, True, TEXT_SECONDARY)
             self.screen.blit(ns, (kx + 26, ky - 7))
 
         pygame.display.flip()
@@ -370,23 +377,15 @@ class FPRenderer:
         self,
         rect:  pygame.Rect,
         label: str,
-        color: Tuple[int, int, int],
+        danger: bool = False,
     ) -> None:
-        """Large hero button with gradient-like fill and pulsing border."""
-        border = self._pulse_color(tuple(c // 2 for c in color), color, self._tick, 40)
-        # Layered glow
-        for expand in (8, 4, 2):
-            glow_r = pygame.Rect(rect.x - expand, rect.y - expand,
-                                 rect.w + expand * 2, rect.h + expand * 2)
-            gs = pygame.Surface((glow_r.w, glow_r.h), pygame.SRCALPHA)
-            alpha = max(0, 60 - expand * 12)
-            gs.fill((color[0] // 4, color[1] // 4, color[2] // 4, alpha))
-            self.screen.blit(gs, glow_r.topleft)
+        """Large primary CTA — flat panel + hairline border, no glow/pulse."""
+        edge = DANGER if danger else ACCENT
         bg = pygame.Surface((rect.w, rect.h), pygame.SRCALPHA)
-        bg.fill((color[0] // 6, color[1] // 6, color[2] // 6, 220))
+        bg.fill((255, 255, 255, 22))
         self.screen.blit(bg, rect.topleft)
-        pygame.draw.rect(self.screen, border, rect, 3, border_radius=10)
-        lbl_s = self.font_game_title.render(label, True, color)
+        pygame.draw.rect(self.screen, edge, rect, 2, border_radius=6)
+        lbl_s = self.font_game_title.render(label, True, edge)
         lbl_s = pygame.transform.smoothscale(
             lbl_s, (min(lbl_s.get_width(), rect.w - 20),
                     min(lbl_s.get_height(), rect.h - 8))
@@ -423,8 +422,7 @@ class FPRenderer:
         self.screen.blit(ov, (0, 0))
 
         # ── 제목 (게임 전용 폰트) ─────────────────────────────────────────
-        tc = self._pulse_color(GOLD, WHITE, self._tick, 80)
-        ts = self.font_game_title.render("AUDIO  SETTINGS", True, tc)
+        ts = self.font_game_title.render("AUDIO  SETTINGS", True, TEXT_PRIMARY)
         # 제목 뒤 그림자
         ts_sh = self.font_game_title.render("AUDIO  SETTINGS", True, (0, 0, 0))
         self.screen.blit(ts_sh, ts_sh.get_rect(center=(W // 2 + 3, 42 + 3)))
@@ -438,12 +436,12 @@ class FPRenderer:
             toggle_y = 38
             toggle_rect = pygame.Rect(toggle_x, toggle_y, toggle_w, toggle_h)
             
-            toggle_col = PINK if use_custom else CYAN
+            toggle_col = ACCENT if use_custom else HAIRLINE
             toggle_bg = pygame.Surface((toggle_w, toggle_h), pygame.SRCALPHA)
-            toggle_bg.fill((toggle_col[0] // 5, toggle_col[1] // 5, toggle_col[2] // 5, 200))
+            toggle_bg.fill((255, 255, 255, 16))
             self.screen.blit(toggle_bg, toggle_rect.topleft)
-            pygame.draw.rect(self.screen, toggle_col, toggle_rect, 2, border_radius=14)
-            
+            pygame.draw.rect(self.screen, toggle_col, toggle_rect, 1, border_radius=14)
+
             toggle_txt = "🎵 CUSTOM" if use_custom else "🎵 DEFAULT"
             toggle_s = self.font_game_tab.render(toggle_txt, True, toggle_col)
             self.screen.blit(toggle_s, toggle_s.get_rect(center=toggle_rect.center))
@@ -608,8 +606,8 @@ class FPRenderer:
         # ── 저장 / 뒤로 버튼 ─────────────────────────────────────────────
         btn_save = pygame.Rect(W // 2 - 125, H - 42, 110, 34)
         btn_back = pygame.Rect(W // 2 + 15,  H - 42, 110, 34)
-        self._draw_button(btn_save, "저장", GREEN, self.font_kor_big)
-        self._draw_button(btn_back, "뒤로", GREY,  self.font_kor_big)
+        self._draw_button(btn_save, "저장", self.font_kor_big)
+        self._draw_button(btn_back, "뒤로", self.font_kor_big)
         clickables.append((btn_save, "save", None))
         clickables.append((btn_back, "back", None))
         
@@ -636,10 +634,9 @@ class FPRenderer:
         self.screen.blit(overlay, (0, 0))
 
         # ── Title (game font + shadow) ─────────────────────────────────────
-        tc     = self._pulse_color(GOLD, WHITE, tick, 80)
         ts_sh  = self.font_game_title.render("SPELL  GUIDE", True, (0, 0, 0))
         ts_sh.set_alpha(90)
-        ts     = self.font_game_title.render("SPELL  GUIDE", True, tc)
+        ts     = self.font_game_title.render("SPELL  GUIDE", True, TEXT_PRIMARY)
         self.screen.blit(ts_sh, ts_sh.get_rect(center=(W // 2 + 2, 38 + 2)))
         self.screen.blit(ts,    ts.get_rect(center=(W // 2, 38)))
         pygame.draw.line(self.screen, RUNE_DIM, (W // 8, 64), (W * 7 // 8, 64), 1)
@@ -972,7 +969,7 @@ class FPRenderer:
             title_txt = "GAME OVER"
             sub_txt   = "You were defeated by the Arcane Boss..."
         else:
-            title_col = self._pulse_color(GOLD, (255, 240, 180), tick, 50)
+            title_col = self._pulse_color((190, 190, 196), WHITE, tick, 50)
             title_txt = "VICTORY!"
             sub_txt   = "The Arcane Boss has been vanquished!"
 
@@ -991,7 +988,7 @@ class FPRenderer:
         self.screen.blit(title_surf, tc)
 
         # Subtitle
-        sub_surf = self.font_big.render(sub_txt, True, GREY)
+        sub_surf = self.font_big.render(sub_txt, True, TEXT_SECONDARY)
         self.screen.blit(sub_surf, sub_surf.get_rect(center=(W // 2, H // 2 + 20)))
 
         # Prompt (blink)
@@ -1015,7 +1012,7 @@ class FPRenderer:
 
         if self._pause_ov is None:
             self._pause_ov = pygame.Surface((W, H), pygame.SRCALPHA)
-            self._pause_ov.fill((0, 0, 18, 215))
+            self._pause_ov.fill((0, 0, 0, 190))
         self.screen.blit(self._pause_ov, (0, 0))
 
         # 패널
@@ -1023,26 +1020,24 @@ class FPRenderer:
         px, py = W // 2 - pw // 2, H // 2 - ph // 2
         if not hasattr(self, "_pause_panel"):
             self._pause_panel: pygame.Surface = pygame.Surface((pw, ph), pygame.SRCALPHA)
-            self._pause_panel.fill((8, 4, 28, 245))
+            self._pause_panel.fill((14, 14, 16, 245))
         self.screen.blit(self._pause_panel, (px, py))
-        border_c = self._pulse_color(CYAN, WHITE, self._tick, 60)
-        pygame.draw.rect(self.screen, border_c, (px, py, pw, ph), 2, border_radius=14)
+        pygame.draw.rect(self.screen, HAIRLINE, (px, py, pw, ph), 1, border_radius=14)
 
         # 제목
-        tc = self._pulse_color((80, 220, 255), WHITE, self._tick, 50)
-        ts = self.font_game_title.render("PAUSED", True, tc)
+        ts = self.font_game_title.render("PAUSED", True, TEXT_PRIMARY)
         self.screen.blit(ts, ts.get_rect(center=(W // 2, py + 44)))
         pygame.draw.line(self.screen, RUNE_DIM, (px + 20, py + 74), (px + pw - 20, py + 74), 1)
 
         # RESUME 버튼
         btn_resume = pygame.Rect(W // 2 - 120, py + 84, 240, 50)
-        self._draw_hero_button(btn_resume, "RESUME", GREEN)
+        self._draw_hero_button(btn_resume, "RESUME")
         clickables.append((btn_resume, "resume", None))
 
         # 볼륨 컨트롤 (BGM / SFX 2행)
         vol_rows = [
-            ("BGM  VOL", bgm_vol, GOLD,   "vol_bgm_down", "vol_bgm_up"),
-            ("SFX  VOL", sfx_vol, PURPLE, "vol_sfx_down", "vol_sfx_up"),
+            ("BGM  VOL", bgm_vol, TEXT_PRIMARY, "vol_bgm_down", "vol_bgm_up"),
+            ("SFX  VOL", sfx_vol, TEXT_PRIMARY, "vol_sfx_down", "vol_sfx_up"),
         ]
         for row_i, (label, vol, col, act_m, act_p) in enumerate(vol_rows):
             ry = py + 156 + row_i * 54
@@ -1051,8 +1046,8 @@ class FPRenderer:
             self.screen.blit(lbl_s, lbl_s.get_rect(midleft=(px + 36, ry + 15)))
 
             btn_m = pygame.Rect(px + pw - 142, ry + 4, 30, 26)
-            pygame.draw.rect(self.screen, (40, 30, 60), btn_m, border_radius=5)
-            pygame.draw.rect(self.screen, col, btn_m, 1, border_radius=5)
+            pygame.draw.rect(self.screen, (28, 28, 32), btn_m, border_radius=5)
+            pygame.draw.rect(self.screen, HAIRLINE, btn_m, 1, border_radius=5)
             ms = self.font_game_tab.render("-", True, col)
             self.screen.blit(ms, ms.get_rect(center=btn_m.center))
             clickables.append((btn_m, act_m, None))
@@ -1061,8 +1056,8 @@ class FPRenderer:
             self.screen.blit(num_s, num_s.get_rect(center=(px + pw - 92, ry + 17)))
 
             btn_p = pygame.Rect(px + pw - 56, ry + 4, 30, 26)
-            pygame.draw.rect(self.screen, (40, 30, 60), btn_p, border_radius=5)
-            pygame.draw.rect(self.screen, col, btn_p, 1, border_radius=5)
+            pygame.draw.rect(self.screen, (28, 28, 32), btn_p, border_radius=5)
+            pygame.draw.rect(self.screen, HAIRLINE, btn_p, 1, border_radius=5)
             ps = self.font_game_tab.render("+", True, col)
             self.screen.blit(ps, ps.get_rect(center=btn_p.center))
             clickables.append((btn_p, act_p, None))
@@ -1072,7 +1067,7 @@ class FPRenderer:
 
         # EXIT TO MENU 버튼
         btn_exit = pygame.Rect(W // 2 - 120, py + 290, 240, 48)
-        self._draw_button(btn_exit, "EXIT  TO  MENU", RED)
+        self._draw_button(btn_exit, "EXIT  TO  MENU", danger=True)
         clickables.append((btn_exit, "exit_menu", None))
 
         pygame.display.flip()
@@ -1108,17 +1103,17 @@ class FPRenderer:
             fy = int(horizon + (H - horizon) * d)
             spread = int(W * 0.5 * d)
             alpha = int(35 * (1.0 - d * 0.7))
-            line_col = (alpha, alpha // 2, alpha * 2)
+            line_col = (alpha, alpha, alpha)
             pygame.draw.line(self.screen, line_col, (vx - spread, fy), (vx + spread, fy), 1)
 
         # Converging side lines (from vanishing point)
         for i in range(-5, 6):
             floor_x = W // 2 + i * (W // 10)
-            pygame.draw.line(self.screen, (18, 10, 32), (vx, vy), (floor_x, H), 1)
+            pygame.draw.line(self.screen, (16, 16, 18), (vx, vy), (floor_x, H), 1)
 
         # Vanishing-point rune circle
         rune_r = int(55 + 7 * math.sin(self._tick * 0.04))
-        rc = self._pulse_color((25, 15, 60), (55, 35, 120), self._tick, 70)
+        rc = self._pulse_color((40, 40, 46), (95, 95, 105), self._tick, 70)
         pygame.draw.circle(self.screen, rc, (vx, vy), rune_r, 2)
         pygame.draw.circle(self.screen, rc, (vx, vy), max(1, rune_r - 18), 1)
 
@@ -1130,7 +1125,7 @@ class FPRenderer:
     def _draw_pillar(self, cx: int, top_y: int, H: int) -> None:
         pw, bot_y = 16, H
         top_y = top_y - 80
-        pygame.draw.rect(self.screen, (14, 8, 24), (cx - pw // 2, top_y, pw, bot_y - top_y))
+        pygame.draw.rect(self.screen, (16, 16, 18), (cx - pw // 2, top_y, pw, bot_y - top_y))
         pygame.draw.rect(self.screen, RUNE_DIM,  (cx - pw // 2, top_y, pw, bot_y - top_y), 1)
         for k in range(3):
             dy = top_y + (bot_y - top_y) * (k + 1) // 4
@@ -1252,6 +1247,35 @@ class FPRenderer:
             self._boss_sh_r = R
         self.screen.blit(self._boss_sh_surf, (cx - R * 3 // 2, cy + R - 8))
 
+        # ── 날개 (박쥐형 막 — 몸통 스케일감·실루엣 확보, 가장 뒤에 배치) ─────
+        wing_flap = math.sin(self._tick * 0.045)
+        wing_col  = (10, 3, 8)
+        wing_rim  = (120, 30, 40) if not enraged else (200, 60, 20)
+        for side in (-1, 1):
+            wsx = cx + side * 30
+            wsy = cy + int(R * 0.55)
+            spread = (58 if is_attacking else 40) + 10 * wing_flap * side * -1
+            tip_x  = wsx + side * (R * 1.7 + spread)
+            tip_y  = wsy - int(R * 0.65) - 14 * wing_flap
+            mid_x  = wsx + side * (R * 1.05)
+            mid_y  = wsy + int(R * 0.15)
+            wing_pts = [
+                (wsx, wsy - int(R * 0.25)),
+                (tip_x, tip_y),
+                (wsx + side * (R * 1.3), wsy - int(R * 0.05)),
+                (mid_x, mid_y),
+                (wsx + side * (R * 0.6), wsy + int(R * 0.55)),
+                (wsx, wsy + int(R * 0.35)),
+            ]
+            pygame.draw.polygon(self.screen, wing_col, wing_pts)
+            pygame.draw.polygon(self.screen, wing_rim, wing_pts, 2)
+            # 날개 뼈대(막 힘줄)
+            for k in range(3):
+                bt = (k + 1) / 4.0
+                bone_x = int(wsx + (tip_x - wsx) * bt)
+                bone_y = int(wsy - int(R * 0.1) + (tip_y - wsy + int(R * 0.1)) * bt)
+                pygame.draw.line(self.screen, wing_rim, (wsx, wsy - int(R * 0.1)), (bone_x, bone_y), 1)
+
         # ── 클로크 / 로브 (흔들림 애니메이션) ───────────────────────────────
         csway = int(5 * math.sin(self._tick * 0.028))
         cloak_pts = [
@@ -1321,6 +1345,28 @@ class FPRenderer:
         # 정반사 점
         pygame.draw.circle(self.screen, (255, 205, 165), (cx - 26, cy - 30), 7)
         pygame.draw.circle(self.screen, (255, 248, 240), (cx - 28, cy - 32), 3)
+
+        # ── 턱 (완전한 구체 실루엣을 깨서 해골/얼굴 형태로) ─────────────────
+        jaw_col = (150, 34, 20) if not enraged else (200, 48, 10)
+        jaw_pts = [
+            (cx - int(R * 0.58), cy + int(R * 0.42)),
+            (cx - int(R * 0.24), cy + int(R * 1.08)),
+            (cx,                 cy + int(R * 1.22)),
+            (cx + int(R * 0.24), cy + int(R * 1.08)),
+            (cx + int(R * 0.58), cy + int(R * 0.42)),
+        ]
+        pygame.draw.polygon(self.screen, jaw_col, jaw_pts)
+        pygame.draw.polygon(self.screen, (60, 12, 8), jaw_pts, 2)
+
+        # ── 눈썹 (찌푸린 인상 — 눈만 있는 밋밋함 제거) ───────────────────────
+        for side in (-1, 1):
+            bx0 = cx + side * 36
+            by0 = cy - 32
+            bx1 = cx + side * 10
+            by1 = cy - 26
+            pygame.draw.polygon(self.screen, (24, 3, 3), [
+                (bx0, by0 - 6), (bx1, by1 - 3), (bx1, by1 + 5), (bx0, by0 + 4),
+            ])
 
         # ── 뿔 (메인 2개 + 보조 2개) ────────────────────────────────────────
         hswing = int(5 * math.sin(self._tick * 0.04)) if is_attacking else 0
@@ -1403,6 +1449,55 @@ class FPRenderer:
                 th = 11 if (enraged and i % 2 == 0) else 7
                 pygame.draw.polygon(self.screen, WHITE,
                                     [(tx, cy + 16), (tx + 6, cy + 16), (tx + 3, cy + 16 + th)])
+
+        # ── 어깨·팔 (머리만 떠 있지 않도록 몸통 매스를 붙임 — 얼굴을 다 그린
+        #    뒤에 그려야 구체/오오라에 덮이지 않고 실제로 보인다) ────────────
+        shoulder_w = R * 1.5
+        shoulder_y = cy + int(R * 0.62)
+        shoulder_pts = [
+            (cx - shoulder_w * 0.50, shoulder_y + 46),
+            (cx - shoulder_w * 0.64, shoulder_y - 2),
+            (cx - shoulder_w * 0.30, shoulder_y - 30),
+            (cx - shoulder_w * 0.14, shoulder_y + 52),
+            (cx + shoulder_w * 0.14, shoulder_y + 52),
+            (cx + shoulder_w * 0.30, shoulder_y - 30),
+            (cx + shoulder_w * 0.64, shoulder_y - 2),
+            (cx + shoulder_w * 0.50, shoulder_y + 46),
+        ]
+        pygame.draw.polygon(self.screen, (16, 5, 10), shoulder_pts)
+        pygame.draw.polygon(self.screen, (66, 22, 26), shoulder_pts, 2)
+        # 견갑 돌기(pauldron spike)
+        for side in (-1, 1):
+            spx = cx + side * shoulder_w * 0.56
+            spy = shoulder_y - 6
+            pygame.draw.polygon(self.screen, (74, 16, 16), [
+                (spx - 9 * side, spy + 12), (spx, spy - 26), (spx + 15 * side, spy + 8),
+            ])
+            pygame.draw.polygon(self.screen, (150, 45, 35), [
+                (spx - 9 * side, spy + 12), (spx, spy - 26), (spx + 15 * side, spy + 8),
+            ], 1)
+
+        # 팔 (공격 시 앞으로 뻗는 포즈로 전환)
+        reach = 1.0 if is_attacking else 0.0
+        arm_dark, arm_mid = (18, 4, 4), (110, 26, 24)
+        for side in (-1, 1):
+            shx, shy = cx + side * shoulder_w * 0.58, shoulder_y - 2
+            ebx = shx + side * (24 + 16 * reach)
+            eby = shy + 44 + int(6 * math.sin(self._tick * 0.05 + side))
+            hdx = ebx + side * (14 - 38 * reach)
+            hdy = eby + 40 - 22 * reach
+            pygame.draw.line(self.screen, arm_dark, (shx, shy), (ebx, eby), 17)
+            pygame.draw.line(self.screen, arm_mid,  (shx, shy), (ebx, eby), 12)
+            pygame.draw.line(self.screen, arm_dark, (ebx, eby), (hdx, hdy), 14)
+            pygame.draw.line(self.screen, arm_mid,  (ebx, eby), (hdx, hdy), 10)
+            pygame.draw.circle(self.screen, arm_mid, (int(hdx), int(hdy)), 8)
+            # 발톱 3개
+            base_ang = math.atan2(hdy - eby, hdx - ebx)
+            for k in range(3):
+                cang = base_ang + (k - 1) * 0.5
+                clx = hdx + math.cos(cang) * 22
+                cly = hdy + math.sin(cang) * 22
+                pygame.draw.line(self.screen, (225, 220, 205), (hdx, hdy), (clx, cly), 3)
 
         # ── 에너지 촉수 ─────────────────────────────────────────────────────
         tc_count = 6 if enraged else 4
@@ -1505,50 +1600,11 @@ class FPRenderer:
             gc = self._pulse_color((100, 60, 200), (180, 130, 255), self._tick + k * 22, 60)
             pygame.draw.circle(self.screen, gc, (gx, wy_b - 22), 3)
 
-        # ── 손 (팜 + 손가락 마디 표현) ─────────────────────────────────────
+        # ── 손 그립 기준점 (실제로 완드를 감아쥘 수 있도록 샤프트 위에 배치) ─
         skin     = (196, 150, 110)
         skin_mid = (175, 128,  88)
         skin_shd = (138,  96,  66)
         hx, hy   = wx_b - 22, wy_b - 36 + bob // 4
-
-        # 팜 (3레이어로 입체감)
-        pygame.draw.ellipse(self.screen, skin_shd, (hx - 22, hy - 16, 50, 40))
-        pygame.draw.ellipse(self.screen, skin_mid, (hx - 20, hy - 15, 47, 37))
-        pygame.draw.ellipse(self.screen, skin,     (hx - 18, hy - 13, 43, 33))
-        # 팜 하이라이트
-        pygame.draw.ellipse(self.screen, (216, 170, 130), (hx - 10, hy - 12, 18, 12))
-        # 손등 주름
-        pygame.draw.line(self.screen, skin_shd, (hx - 16, hy - 11), (hx + 16, hy - 11), 2)
-        pygame.draw.line(self.screen, skin_shd, (hx - 12, hy - 6),  (hx + 12, hy - 6),  1)
-
-        # 손가락 (4개 — 마디 2개씩)
-        f_data = [(-12, 1), (-4, 0), (4, 1), (12, 0)]
-        for fi, (fx_off, bend) in enumerate(f_data):
-            fx = hx + fx_off
-            fy = hy - 15
-            seg1 = 10 + fi % 2
-            seg2 = 7
-            # 근위 마디
-            ex1, ey1 = fx + bend, fy - seg1
-            pygame.draw.line(self.screen, skin_shd, (fx, fy), (ex1, ey1), 6)
-            pygame.draw.line(self.screen, skin_mid, (fx, fy), (ex1, ey1), 5)
-            pygame.draw.line(self.screen, skin,     (fx, fy), (ex1, ey1), 3)
-            # 원위 마디
-            ex2, ey2 = ex1 + bend, ey1 - seg2
-            pygame.draw.line(self.screen, skin_shd, (ex1, ey1), (ex2, ey2), 5)
-            pygame.draw.line(self.screen, skin_mid, (ex1, ey1), (ex2, ey2), 4)
-            pygame.draw.line(self.screen, skin,     (ex1, ey1), (ex2, ey2), 2)
-            # 손끝 + 손톱
-            pygame.draw.circle(self.screen, skin_mid, (ex2, ey2), 4)
-            pygame.draw.circle(self.screen, skin,     (ex2, ey2), 3)
-            pygame.draw.circle(self.screen, (216, 175, 148), (ex2, ey2 - 1), 1)
-
-        # 엄지
-        pygame.draw.line(self.screen, skin_shd, (hx - 18, hy - 2), (hx - 27, hy - 10), 7)
-        pygame.draw.line(self.screen, skin_mid, (hx - 18, hy - 2), (hx - 27, hy - 10), 6)
-        pygame.draw.line(self.screen, skin,     (hx - 18, hy - 2), (hx - 27, hy - 10), 4)
-        pygame.draw.circle(self.screen, skin_mid, (hx - 27, hy - 14), 5)
-        pygame.draw.circle(self.screen, skin,     (hx - 27, hy - 14), 4)
 
         # ── 완드 샤프트 (레이어드 목재 + 하이라이트) ─────────────────────────
         pygame.draw.line(self.screen, (22, 12, 4),   (wx_b, wy_b), (wx_t, wy_t), 13)  # 그림자
@@ -1639,6 +1695,59 @@ class FPRenderer:
             opx = wx_t + int(10 * math.cos(a))
             opy = wy_t + int(7  * math.sin(a))
             pygame.draw.circle(self.screen, gem_hot, (opx, opy), 1)
+
+        # ── 손목 브레이서 (가죽 밴드 — 손목이 허공에 떠 보이지 않도록) ───────
+        wr_x = int((hx + wx_b) / 2) + 6
+        wr_y = int((hy + wy_b) / 2) - 2
+        pygame.draw.ellipse(self.screen, (46, 34, 20), (wr_x - 27, wr_y - 15, 54, 28))
+        pygame.draw.ellipse(self.screen, (86, 64, 36), (wr_x - 27, wr_y - 15, 54, 28), 2)
+        pygame.draw.circle(self.screen, (150, 128, 86), (wr_x, wr_y), 3)
+
+        # ── 손 (완드 방향을 감싸 쥐는 그립 — 샤프트 위에 손가락이 겹치도록) ──
+        # 팜 (3레이어로 입체감)
+        pygame.draw.ellipse(self.screen, skin_shd, (hx - 22, hy - 16, 50, 40))
+        pygame.draw.ellipse(self.screen, skin_mid, (hx - 20, hy - 15, 47, 37))
+        pygame.draw.ellipse(self.screen, skin,     (hx - 18, hy - 13, 43, 33))
+        # 팜 하이라이트
+        pygame.draw.ellipse(self.screen, (216, 170, 130), (hx - 10, hy - 12, 18, 12))
+        # 손등 주름
+        pygame.draw.line(self.screen, skin_shd, (hx - 16, hy - 11), (hx + 16, hy - 11), 2)
+        pygame.draw.line(self.screen, skin_shd, (hx - 12, hy - 6),  (hx + 12, hy - 6),  1)
+
+        # 완드 축 방향으로 감아쥐는 손가락 (4개 — 마디 2개씩, 그립감 강화)
+        wang = math.atan2(wy_t - hy, wx_t - hx)
+        f_data = [(-0.55, 1), (-0.20, 0), (0.10, 1), (0.42, 0)]
+        for fi, (ang_off, bend) in enumerate(f_data):
+            fx, fy = hx, hy - 6
+            a1   = wang + ang_off
+            seg1 = 13 + bend * 2
+            ex1  = fx + math.cos(a1) * seg1
+            ey1  = fy + math.sin(a1) * seg1
+            # 근위 마디 (샤프트를 향해 뻗음)
+            pygame.draw.line(self.screen, skin_shd, (fx, fy), (ex1, ey1), 6)
+            pygame.draw.line(self.screen, skin_mid, (fx, fy), (ex1, ey1), 5)
+            pygame.draw.line(self.screen, skin,     (fx, fy), (ex1, ey1), 3)
+            # 원위 마디 (샤프트를 감싸며 안쪽으로 말림)
+            a2  = a1 + 0.55
+            ex2 = ex1 + math.cos(a2) * 8
+            ey2 = ey1 + math.sin(a2) * 8
+            pygame.draw.line(self.screen, skin_shd, (ex1, ey1), (ex2, ey2), 5)
+            pygame.draw.line(self.screen, skin_mid, (ex1, ey1), (ex2, ey2), 4)
+            pygame.draw.line(self.screen, skin,     (ex1, ey1), (ex2, ey2), 2)
+            # 손끝 + 손톱
+            pygame.draw.circle(self.screen, skin_mid, (int(ex2), int(ey2)), 4)
+            pygame.draw.circle(self.screen, skin,     (int(ex2), int(ey2)), 3)
+            pygame.draw.circle(self.screen, (216, 175, 148), (int(ex2), int(ey2) - 1), 1)
+
+        # 엄지 (반대쪽에서 감아 그립을 완성)
+        tang = wang - 2.35
+        tx1  = hx + math.cos(tang) * 15
+        ty1  = hy + math.sin(tang) * 15
+        pygame.draw.line(self.screen, skin_shd, (hx - 4, hy - 2), (tx1, ty1), 7)
+        pygame.draw.line(self.screen, skin_mid, (hx - 4, hy - 2), (tx1, ty1), 6)
+        pygame.draw.line(self.screen, skin,     (hx - 4, hy - 2), (tx1, ty1), 4)
+        pygame.draw.circle(self.screen, skin_mid, (int(tx1), int(ty1)), 5)
+        pygame.draw.circle(self.screen, skin,     (int(tx1), int(ty1)), 4)
 
     # ── Effects ────────────────────────────────────────────────────────────────
 
@@ -1789,8 +1898,8 @@ class FPRenderer:
         pb_bg = pygame.Surface((58, 28), pygame.SRCALPHA)
         pb_bg.fill((0, 0, 0, 160))
         self.screen.blit(pb_bg, pb.topleft)
-        pygame.draw.rect(self.screen, CYAN, pb, 1, border_radius=5)
-        pb_s = self.font_game_tab.render("II ESC", True, CYAN)
+        pygame.draw.rect(self.screen, HAIRLINE, pb, 1, border_radius=5)
+        pb_s = self.font_game_tab.render("II ESC", True, TEXT_PRIMARY)
         self.screen.blit(pb_s, pb_s.get_rect(center=pb.center))
 
     def _draw_hp_panel(
@@ -1813,7 +1922,7 @@ class FPRenderer:
         fill_col = self._lerp_color(RED, color, ratio)
         if int(w * ratio) > 0:
             pygame.draw.rect(self.screen, fill_col, (x, y, int(w * ratio), h), border_radius=4)
-        pygame.draw.rect(self.screen, GREY, (x, y, w, h), 1, border_radius=4)
+        pygame.draw.rect(self.screen, HAIRLINE, (x, y, w, h), 1, border_radius=4)
 
     def _draw_chip(self, x: int, y: int, text: str, color: Tuple[int, int, int]) -> None:
         surf = self.font.render(text, True, color)
@@ -2255,25 +2364,27 @@ class FPRenderer:
             pygame.draw.circle(self.screen, c, (cx, cy), r + i * 3)
 
     def _draw_rune_separator(self, y: int) -> None:
+        """Static hairline divider — chrome stays still, no per-frame pulse."""
         W = self.W
-        col = self._pulse_color(RUNE_DIM, RUNE_GLO, self._tick, 60)
-        pygame.draw.line(self.screen, col, (W // 4, y), (W * 3 // 4, y), 1)
+        pygame.draw.line(self.screen, HAIRLINE, (W // 4, y), (W * 3 // 4, y), 1)
         for dx in range(-60, 61, 20):
-            pygame.draw.circle(self.screen, col, (W // 2 + dx, y), 2)
+            pygame.draw.circle(self.screen, HAIRLINE, (W // 2 + dx, y), 2)
 
     def _draw_button(
         self,
         rect:  pygame.Rect,
         label: str,
-        color: Tuple[int, int, int],
         font:  Optional[pygame.font.Font] = None,
+        danger: bool = False,
     ) -> None:
-        border = self._pulse_color(tuple(c // 3 for c in color), color, self._tick, 50)
+        """Flat hairline button — minimal arcade chrome, no glow/pulse."""
+        edge = DANGER if danger else HAIRLINE
+        text_c = DANGER if danger else TEXT_PRIMARY
         bg = pygame.Surface((rect.w, rect.h), pygame.SRCALPHA)
-        bg.fill((color[0] // 8, color[1] // 8, color[2] // 8, 200))
+        bg.fill((255, 255, 255, 14))
         self.screen.blit(bg, rect.topleft)
-        pygame.draw.rect(self.screen, border, rect, 2, border_radius=8)
-        lbl = (font or self.font_big).render(label, True, color)
+        pygame.draw.rect(self.screen, edge, rect, 1, border_radius=5)
+        lbl = (font or self.font_big).render(label, True, text_c)
         self.screen.blit(lbl, lbl.get_rect(center=rect.center))
 
     @staticmethod
