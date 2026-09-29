@@ -63,12 +63,15 @@ class HeadTracker:
     - 속도 적응형 EMA + 히스토리 평균 + 히스테리시스 + 최소 유지 프레임
     """
 
+    # 앉은 자세에서는 화면과의 거리가 가까워 고개를 크게 돌리기 어렵다.
+    # sensitivity 를 올리면 같은 각도로도 더 쉽게 LEFT/RIGHT 가 잡힌다.
     def __init__(
         self,
         max_num_faces: int = 1,
         min_detection_confidence: float = 0.55,
         min_tracking_confidence: float = 0.50,
         refine_landmarks: bool = False,
+        sensitivity: float = 1.0,
         smooth_window: int = 5,
         draw_mesh: bool = False,
         draw_debug: bool = False,
@@ -84,6 +87,10 @@ class HeadTracker:
         # draw_debug=False 면 프레임 복사·오버레이 드로잉을 건너뛴다(방향값만 필요할 때).
         self.draw_debug = draw_debug or draw_mesh
 
+        # 임계값은 인스턴스 값이다 — 앉은 자세 프리셋이 감도를 높일 수 있다.
+        sens = max(0.5, min(2.5, float(sensitivity)))
+        self._enter = _ENTER / sens
+        self._exit  = _EXIT / sens
         self._ema_yaw:  Optional[float] = None   # 스무딩된 yaw
         self._prev_raw: Optional[float] = None   # 직전 프레임 raw(스파이크 판정용)
         self._history:  Deque[float]    = deque(maxlen=max(1, smooth_window))
@@ -158,7 +165,7 @@ class HeadTracker:
         raw = yaw - self._calib
 
         # 중앙 부근이면 기준점을 서서히 현재로 재보정(느린 자가 치유)
-        if abs(raw) < _ENTER:
+        if abs(raw) < self._enter:
             self._calib += _CALIB_ALPHA * (yaw - self._calib)
         # 한 방향에 너무 오래 갇혀 있으면(신호가 안 커지는데도) 기준점을 끌어당김
         elif self._hold > _UNSTICK_HOLD:
@@ -199,7 +206,7 @@ class HeadTracker:
             gx = w // 2
             cv2.line(annotated, (gx, h - 40), (gx + int(smooth * w * 0.9), h - 40), (255, 120, 0), 4)
             for sgn in (-1, 1):
-                mx = gx + int(sgn * _ENTER * w * 0.9)
+                mx = gx + int(sgn * self._enter * w * 0.9)
                 cv2.line(annotated, (mx, h - 52), (mx, h - 28), (0, 180, 0), 1)
             cv2.putText(annotated,
                         f"HEAD: {head_dir}  yaw={smooth:+.3f}  calib={self._calib:+.3f}",
@@ -242,12 +249,12 @@ class HeadTracker:
 
         if prev == "LEFT":
             # LEFT 탈출 조건: hold 충분히 & offset이 EXIT 경계 안쪽으로 복귀
-            new = "CENTER" if (self._hold >= _MIN_HOLD and smooth > -_EXIT) else "LEFT"
+            new = "CENTER" if (self._hold >= _MIN_HOLD and smooth > -self._exit) else "LEFT"
         elif prev == "RIGHT":
-            new = "CENTER" if (self._hold >= _MIN_HOLD and smooth < _EXIT) else "RIGHT"
-        elif smooth < -_ENTER:
+            new = "CENTER" if (self._hold >= _MIN_HOLD and smooth < self._exit) else "RIGHT"
+        elif smooth < -self._enter:
             new = "LEFT"
-        elif smooth > _ENTER:
+        elif smooth > self._enter:
             new = "RIGHT"
         else:
             new = "CENTER"

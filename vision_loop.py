@@ -40,8 +40,9 @@ except Exception:
             "mediapipe Hands 모듈이 필요합니다.\npip install mediapipe 로 설치해 주세요."
         ) from e
 
-from gesture import GestureAnalyzer
+from gesture import DualHandAnalyzer, GestureAnalyzer, GestureConfig, seated_config
 from head_tracker import HeadTracker
+from webcam_overlay import MIRROR_SRC_SIZE, prepare_mirror_frame
 from trajectory import TrajectoryBuffer, TrajectoryConfig
 
 log = logging.getLogger("air_spell_arena.vision")
@@ -63,6 +64,8 @@ _MIN_MOVE_SQ = 4             # 최소 이동(px^2) 미만이면 이전 좌표 �
 _MAX_JUMP_PX = 230          # 프레임당 손끝 이동 한계(스파이크/튐 제거)
 _PAINT_RESET_FRAMES = 300    # 디버그 paint 캔버스 주기적 초기화
 _TRAIL_LEN = 24             # 게임 화면 트레일 표시용 최근 좌표 개수
+_MAX_HANDS = 2              # 양손 추적(듀얼 캐스팅) — 한 손만 잡히면 기존 단일 경로로 동작
+_MIRROR_EVERY_N = 2         # 미러(수정구) 프레임 갱신 주기 — 30fps 캡처 기준 약 15fps로 충분
 
 _POSE_COLORS = {
     "FIRE": (30, 140, 255), "WATER": (255, 150, 50),
@@ -81,6 +84,9 @@ class VisionResult:
     fps: float = 0.0
     trail: List[Tuple[float, float]] = field(default_factory=list)  # 정규화(0~1) 손끝 궤적
     drawing: bool = False                    # 현재 스트로크 진행 중 여부
+    dual_progress: float = 0.0               # 듀얼 캐스팅 홀드 진행률(0~1)
+    hands_seen: int = 0                      # 이번 프레임에 잡힌 손 개수(0~2)
+    mirror: Optional[np.ndarray] = None      # 수정구용 소형 정사각 RGB 프레임
     annotated: Optional[np.ndarray] = None   # show_debug=True 일 때만
     mask: Optional[np.ndarray] = None
     paint: Optional[np.ndarray] = None
@@ -93,10 +99,14 @@ SpellEvent = Tuple[str, str]
 class VisionPipeline:
     """비전 캡처·추론 워커 스레드를 캡슐화한 파이프라인."""
 
-    def __init__(self, camera_index: int = 0, show_debug: bool = True) -> None:
+    def __init__(self, camera_index: int = 0, show_debug: bool = True,
+                 seated: bool = False) -> None:
         self._show_debug = show_debug
+        # 앉은 자세 프리셋 — 판정 여유를 키우고 유지 프레임을 줄인다(고릴라 암 완화).
+        cfg: GestureConfig = seated_config() if seated else GestureConfig()
         self._traj = TrajectoryBuffer(TrajectoryConfig())
-        self._analyzer = GestureAnalyzer()
+        self._analyzer = GestureAnalyzer(cfg)
+        self._dual = DualHandAnalyzer(cfg)
 
         self._cap = cv2.VideoCapture(camera_index)
         self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, _CAP_WIDTH)
@@ -109,12 +119,14 @@ class VisionPipeline:
 
         self._hands = mp_hands.Hands(
             static_image_mode=False,
-            max_num_hands=1,
+            max_num_hands=_MAX_HANDS,
             model_complexity=_HAND_COMPLEXITY,
             min_detection_confidence=_HAND_DET_CONF,
             min_tracking_confidence=_HAND_TRK_CONF,
         )
-        self._head = HeadTracker(draw_mesh=False, draw_debug=False)
+        # 앉으면 화면이 가까워 고개를 크게 돌리기 어렵다 → 감도를 올린다.
+        self._head = HeadTracker(draw_mesh=False, draw_debug=False,
+                                 sensitivity=1.45 if seated else 1.0)
 
         # ── 스레드 공유 상태 ──
         self._lock = threading.Lock()
@@ -133,6 +145,7 @@ class VisionPipeline:
         self._paint: Optional[np.ndarray] = None
         self._paint_count = 0
         self._frame_i = 0
+        self._mirror: Optional[np.ndarray] = None   # 최근 미러 프레임(주기적 갱신)
         self._t_prev = time.perf_counter()
         self._fps = 0.0
 
@@ -216,22 +229,30 @@ class VisionPipeline:
             infer = frame
         infer_rgb = cv2.cvtColor(infer, cv2.COLOR_BGR2RGB)
 
-        # ── Hands ──
+        # ── Hands (최대 2개) ──
         results = self._hands.process(infer_rgb)
         annotated = frame.copy() if self._show_debug else None
-        hand_lm = None
         center: Optional[Point] = None
         # mediapipe 결과는 동적 NamedTuple → getattr 로 안전 접근
-        hand_landmarks = getattr(results, "multi_hand_landmarks", None)
-        if hand_landmarks:
-            hlm = hand_landmarks[0]
-            hand_lm = hlm.landmark
-            tip = hand_lm[mp_hands.HandLandmark.INDEX_FINGER_TIP]
+        hand_landmarks = getattr(results, "multi_hand_landmarks", None) or []
+        all_lms = [h.landmark for h in hand_landmarks]
+
+        # 주(主) 손 = 검지 끝이 가장 높이 올라간 손. "든 손이 그리는 손"이라는
+        # 직관과 맞아떨어져, 양손이 잡혀도 궤적이 손 사이를 오가지 않는다.
+        primary_i = -1
+        if all_lms:
+            primary_i = min(
+                range(len(all_lms)),
+                key=lambda i: all_lms[i][mp_hands.HandLandmark.INDEX_FINGER_TIP].y,
+            )
+            tip = all_lms[primary_i][mp_hands.HandLandmark.INDEX_FINGER_TIP]
             center = (
                 int(np.clip(tip.x * w0, 0, w0 - 1)),
                 int(np.clip(tip.y * h0, 0, h0 - 1)),
             )
-            if annotated is not None:
+
+        if annotated is not None:
+            for i, hlm in enumerate(hand_landmarks):
                 try:
                     mp_drawing.draw_landmarks(
                         annotated, hlm,
@@ -241,12 +262,22 @@ class VisionPipeline:
                     )
                 except Exception:
                     pass
-                cv2.circle(annotated, center, 8, (0, 255, 255), 2)
+                if i == primary_i and center is not None:
+                    cv2.circle(annotated, center, 8, (0, 255, 255), 2)
 
-        # ── 포즈 인식 (FIRE/WATER/EARTH/WIND) ──
-        pose_spell = self._analyzer.update_pose(hand_lm)
-        if pose_spell:
-            self._spell_q.put(("pose", pose_spell))
+        # ── 듀얼 캐스팅 판정이 단일 포즈보다 우선 ──
+        # 양손이 동시에 성립했는데 단일 포즈까지 따로 나가면 한 손짓이 두 번
+        # 소비된다. 듀얼이 발동한 프레임에는 단일 분석기를 비워 중복을 막는다.
+        dual = self._dual.update(all_lms if len(all_lms) >= 2 else None)
+        if dual is not None:
+            self._spell_q.put((dual.mode, dual.spell))   # ("amplify"|"fusion", 주문명)
+            self._analyzer.update_pose(None)
+        else:
+            # ── 포즈 인식 (FIRE/WATER/EARTH/WIND) — 주 손 기준 ──
+            hand_lm = all_lms[primary_i] if primary_i >= 0 else None
+            pose_spell = self._analyzer.update_pose(hand_lm)
+            if pose_spell:
+                self._spell_q.put(("pose", pose_spell))
 
         # ── center 스무딩(EMA + 최소 이동 임계) ──
         smoothed = self._smooth(center)
@@ -272,6 +303,14 @@ class VisionPipeline:
             self._last_head_dir = hd
         head_dir = self._last_head_dir
 
+        # ── 수정구(미러)용 소형 프레임 ──
+        # 크롭/리사이즈는 여기(워커)에서 끝낸다 — 주 스레드는 색보정과 blit 만 한다.
+        if self._frame_i % _MIRROR_EVERY_N == 0:
+            try:
+                self._mirror = prepare_mirror_frame(frame, MIRROR_SRC_SIZE)
+            except (cv2.error, ValueError):
+                self._mirror = None
+
         # ── FPS(지수평활) ──
         now = time.perf_counter()
         dt = now - self._t_prev
@@ -293,6 +332,9 @@ class VisionPipeline:
             fps=self._fps,
             trail=list(self._trail),
             drawing=smoothed is not None,
+            dual_progress=self._dual.progress,
+            hands_seen=len(all_lms),
+            mirror=self._mirror,
             annotated=annotated,
             mask=mask,
             paint=paint,

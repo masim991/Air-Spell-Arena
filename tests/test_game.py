@@ -33,6 +33,7 @@ def test_affinity_mult(atk, dfn, mult):
 def test_every_registry_and_alias_spell_applies(game):
     for name in list(_SPELL_DB) + list(_SPELL_ALIASES):
         game._cooldowns.clear()
+        game._mana.reset()          # 시전 비용은 별도 테스트에서 검증한다
         res = game.apply_spell(name)
         assert res.applied, name
 

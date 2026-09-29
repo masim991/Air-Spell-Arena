@@ -265,9 +265,16 @@ class AudioManager:
         except Exception:
             pass
 
-    def play_spell_sfx(self, spell_name: str) -> None:
-        """spell_name에 해당하는 SFX를 한 번 재생합니다."""
-        snd = self._sfx_snds.get(spell_name.upper())
+    def play_spell_sfx(self, spell_name: str, fallback_element: Optional[str] = None) -> None:
+        """spell_name에 해당하는 SFX를 한 번 재생합니다.
+
+        콤보 주문(STEAM, FLAME_BALL 등)은 전용 슬롯이 없으므로,
+        fallback_element(예: "FIRE")가 주어지면 해당 기본 원소 SFX로 대체 재생한다.
+        """
+        key = spell_name.upper()
+        snd = self._sfx_snds.get(key)
+        if snd is None and fallback_element:
+            snd = self._sfx_snds.get(fallback_element.upper())
         if snd:
             try:
                 snd.play()

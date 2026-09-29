@@ -17,11 +17,14 @@ from typing import List, Optional, Sequence, Tuple
 
 import pygame
 
+import hud_ext
+
 # ── Minimal Arcade Chrome Palette ──────────────────────────────────────────────
 # Menu/HUD/HUD-frame chrome is monochrome + a single danger accent — no rainbow
 # neon. Spell/element colours below stay vivid; they're gameplay signal, not chrome.
 BLACK    = (0,   0,   0)
 WHITE    = (255, 255, 255)
+BONE     = (222, 210, 188)   # 만화적인 순백 대신 — 뼈/송곳니용 탁한 아이보리
 
 # Background - neutral near-black, no colour tint
 BG_TOP   = (10,  10,  12)
@@ -292,6 +295,16 @@ class FPRenderer:
         btn_settings:  pygame.Rect,
         btn_no_camera: pygame.Rect,
         difficulty:    str,
+        btn_daily:     Optional[pygame.Rect] = None,
+        orb:           Optional[object] = None,
+        orb_center:    Optional[Tuple[int, int]] = None,
+        camera_active: bool = False,
+        seated_mode:   bool = False,
+        daily_best:    int = 0,
+        daily_streak:  int = 0,
+        best_score:    int = 0,
+        unlocked_stage: int = 1,
+        stage_count:   int = 1,
     ) -> None:
         self._tick += 1
         W, H = self.W, self.H
@@ -308,7 +321,7 @@ class FPRenderer:
 
         # ── Title (flat off-white, single soft shadow — no colour pulse) ───
         tf = self.font_game_title
-        ty = H // 4 - 10
+        ty = 116        # 상단 여백이 130px 비어 있었다 — 타이틀을 끌어올린다
 
         sh_t = tf.render("AIR SPELL ARENA", True, (0, 0, 0))
         sh_t.set_alpha(90)
@@ -319,28 +332,86 @@ class FPRenderer:
 
         # ── Subtitle ────────────────────────────────────────────────────────
         sub_f = self.font_game_tab
-        sub_s = sub_f.render("*  Battle the Arcane Boss with Hand Spells  *", True, TEXT_SECONDARY)
+        # 태그라인은 "무슨 게임인지"가 아니라 "왜 이 게임인지"를 말해야 한다.
+        # 이 장르의 구매 이유는 장비가 필요 없다는 것 하나다.
+        sub_s = sub_f.render("NO VR   ·   NO CONTROLLER   ·   JUST YOUR WEBCAM AND YOUR HANDS",
+                             True, TEXT_SECONDARY)
         self.screen.blit(sub_s, sub_s.get_rect(center=(W // 2, ty + 56)))
 
         self._draw_rune_separator(ty + 80)
 
+        # ── Best score / stage-progress hint (progression hook) ────────────
+        if best_score > 0:
+            bs_txt = f"BEST SCORE ({difficulty.upper()})  {best_score}   •   STAGE {unlocked_stage}/{stage_count} UNLOCKED"
+            bs_s = self.font_game_tab.render(bs_txt, True, GOLD)
+            self.screen.blit(bs_s, bs_s.get_rect(center=(W // 2, ty + 100)))
+        elif stage_count > 1:
+            hint_s = self.font_game_tab.render(
+                "Clear a stage to unlock the next boss in the gauntlet", True, TEXT_SECONDARY)
+            self.screen.blit(hint_s, hint_s.get_rect(center=(W // 2, ty + 100)))
+
+        # ── 수정구(라이브 웹캠) ─────────────────────────────────────────────
+        # 웹캠 모션 게임인데 타이틀 화면에 사람이 없으면, 스크린샷 한 장으로는
+        # 평범한 다크 메뉴와 구별되지 않는다. 메뉴에서 이미 "이 게임이 나를
+        # 보고 있다"를 증명하는 게 어떤 카피보다 강하다.
+        if orb is not None and orb_center is not None:
+            ocx, ocy = orb_center
+            orb.render(self.screen, orb_center, self._tick,
+                       accent=RUNE_GLO if camera_active else HAIRLINE)
+            cap_col = TEXT_PRIMARY if camera_active else TEXT_SECONDARY
+            cap = self.font_game_tab.render(
+                "THIS IS YOU" if camera_active else "CAMERA OFF", True, cap_col)
+            self.screen.blit(cap, cap.get_rect(center=(ocx, ocy + 116)))
+            if not camera_active:
+                hint = self.font_game_tab.render("PRESS  C  TO ENABLE", True, HAIRLINE)
+                self.screen.blit(hint, hint.get_rect(center=(ocx, ocy + 138)))
+
         # ── START button (hero — full width, primary CTA) ──────────────────
         self._draw_hero_button(btn_start, "START  GAME")
 
-        # ── EXIT button (danger) ────────────────────────────────────────────
-        self._draw_button(btn_exit, "EXIT", danger=True)
+        # ── DAILY CHALLENGE (secondary CTA — 리텐션 기능은 키로 숨기면 안 된다) ──
+        if btn_daily is not None:
+            # 메뉴 크롬 폰트에는 한글 글리프가 없다 — 여기서 한글을 쓰면 □ 로 깨진다.
+            d_label = "DAILY CHALLENGE"
+            if daily_streak > 0:
+                d_label += f"   ·   STREAK {daily_streak}"
+            self._draw_button(btn_daily, d_label, self.font_game_tab)
+            pygame.draw.rect(self.screen, GOLD, btn_daily, 1, border_radius=5)
 
         # ── GUIDE + SETTINGS (small, side by side) ─────────────────────────
         self._draw_button(btn_guide,    "SPELL GUIDE", self.font_game_tab)
         self._draw_button(btn_settings, "SETTINGS",    self.font_game_tab)
 
-        # ── PLAY WITHOUT CAMERA (accessibility / no motion-tracking mode) ──
-        self._draw_button(btn_no_camera, "PLAY WITHOUT CAMERA", self.font_kor_small)
+        # ── EXIT — 중립 동작이므로 가장 작고 조용하게(예전엔 붉은 2순위 버튼이었다) ──
+        self._draw_button(btn_exit, "EXIT", self.font_game_tab)
+
+        # ── 카메라 토글 — 라벨이 *실제* 파이프라인 상태를 말한다 ──────────────
+        # 예전에는 "PLAY WITHOUT CAMERA" 가 단방향 시작 버튼이라 한 번 끄면
+        # 재시작 말고는 되돌릴 방법이 없었다. 이제는 상태를 보여주는 토글이다.
+        cam_label = "CAMERA  ON" if camera_active else "CAMERA  OFF  (KEYBOARD)"
+        self._draw_button(btn_no_camera, cam_label, self.font_game_tab,
+                          danger=not camera_active)
+
+        # ── 접근성/챌린지 상태 줄 — 지금 어떤 설정으로 플레이하는지 한눈에 ──
+        # 스트릭은 DAILY 버튼이 이미 말하고 있으므로 여기서 반복하지 않는다.
+        status_bits = []
+        if seated_mode:
+            status_bits.append(("SEATED MODE", GREEN))
+        if daily_best > 0:
+            status_bits.append((f"TODAY BEST {daily_best}", GOLD))
+        if status_bits:
+            sx = btn_no_camera.centerx - sum(
+                self.font_game_tab.size(t)[0] + 22 for t, _ in status_bits) // 2
+            sy = btn_no_camera.bottom + 12
+            for text, col in status_bits:
+                s_img = self.font_game_tab.render(text, True, col)
+                self.screen.blit(s_img, (sx, sy))
+                sx += s_img.get_width() + 22
 
         # ── Difficulty badge pill (flat chrome, tier colour on text only) ──
         diff_colors = {"easy": GREEN, "normal": YELLOW, "hard": ORANGE, "impossible": RED}
         dc   = diff_colors.get(difficulty, WHITE)
-        dy_  = H * 3 // 4 + 6
+        dy_  = 516
         pill_w, pill_h = 230, 34
         pill = pygame.Surface((pill_w, pill_h), pygame.SRCALPHA)
         pill.fill((255, 255, 255, 14))
@@ -351,12 +422,16 @@ class FPRenderer:
         self.screen.blit(diff_s, diff_s.get_rect(center=(W // 2, dy_)))
 
         # ── Keyboard shortcut key-caps (flat chrome, tier colour on digit) ──
-        keys = [("1", "Easy", GREEN), ("2", "Normal", YELLOW),
-                ("3", "Hard", ORANGE), ("4", "Impossl", RED), ("G", "Guide", TEXT_SECONDARY)]
-        _kslot = 110
+        # 실제 키 바인딩과 1:1로 맞춘다 — 안 맞는 안내는 없느니만 못하다.
+        keys = [("1", "Easy", GREEN), ("2", "Norm", YELLOW),
+                ("3", "Hard", ORANGE), ("4", "Impos", RED),
+                ("D", "Daily", GOLD), ("K", "Calib", CYAN),
+                ("S", "Seated", GREEN if seated_mode else TEXT_SECONDARY),
+                ("C", "Camera", TEXT_SECONDARY), ("G", "Guide", TEXT_SECONDARY)]
+        _kslot = 104
         total_w = len(keys) * _kslot
         kx0 = W // 2 - total_w // 2
-        ky  = H * 3 // 4 + 42
+        ky  = 556
         for i, (k_lbl, k_name, k_col) in enumerate(keys):
             kx = kx0 + i * _kslot
             # key cap box
@@ -648,7 +723,7 @@ class FPRenderer:
 
         sections = [
             {
-                "label": "GESTURE SPELLS", "lc": ORANGE, "ncols": 4, "ch": 82,
+                "label": "GESTURE SPELLS — ONE HAND", "lc": ORANGE, "ncols": 4, "ch": 74,
                 "entries": [
                     ("palm",  "FIRE",    "손바닥 펴기 (Open Palm)", ORANGE),
                     ("fist",  "WATER",   "주먹 쥐기 (Make Fist)",   BLUE),
@@ -657,12 +732,21 @@ class FPRenderer:
                 ],
             },
             {
-                "label": "DRAW SPELLS", "lc": CYAN, "ncols": 4, "ch": 82,
+                # 이 게임의 차별점이자 가장 강한 그림. 안 가르치면 존재하지 않는 기능이 된다.
+                "label": "DUAL CASTING — BOTH HANDS", "lc": GOLD, "ncols": 3, "ch": 74,
                 "entries": [
-                    ("left",   "LIGHT",     "손 왼쪽 스와이프 (Swipe Left)",   CYAN),
-                    ("right",  "DARK",      "손 오른쪽 스와이프 (Swipe Right)", PURPLE),
-                    ("circle", "SHIELD",    "원 그리기 (Draw Circle)",          (80, 200, 220)),
-                    ("zigzag", "LIGHTNING", "지그재그 (Draw Zigzag)",           BLUE),
+                    ("dual_same", "AMPLIFY x2", "양손 같은 모양 → 위력 2배", GOLD),
+                    ("dual_diff", "FUSION",     "양손 다른 모양 → 상위 주문 즉시", PINK),
+                    ("mana",      "MANA",       "시전마다 소모 · 손 내리고 회복", BLUE),
+                ],
+            },
+            {
+                "label": "DRAW SPELLS", "lc": CYAN, "ncols": 4, "ch": 74,
+                "entries": [
+                    ("left",   "LIGHT",     "손을 왼쪽으로 스와이프",   CYAN),
+                    ("right",  "DARK",      "손을 오른쪽으로 스와이프", PURPLE),
+                    ("circle", "SHIELD",    "허공에 원 그리기",          (80, 200, 220)),
+                    ("zigzag", "LIGHTNING", "허공에 지그재그 그리기",           BLUE),
                 ],
             },
             {
@@ -728,11 +812,54 @@ class FPRenderer:
                 tx_  = dv_x + 10
                 self.screen.blit(nm_s, (tx_, cy_ + 10))
 
-                # Korean description
+                # Korean description — 카드 폭을 넘으면 작은 폰트로 떨어뜨린다.
+                # (4열 레이아웃에서 긴 설명이 옆 카드를 침범하던 문제)
+                avail = card_w - (tx_ - cx_) - 8
                 ds_s = self.font_kor.render(desc, True, (130, 118, 148))
+                if ds_s.get_width() > avail:
+                    ds_s = self.font_kor_small.render(desc, True, (130, 118, 148))
                 self.screen.blit(ds_s, (tx_, cy_ + 10 + nm_s.get_height() + 2))
 
             y_cur += card_h + 7
+
+        # ── NO CAMERA MODE — 웹캠 없이 진행할 때의 키보드 가이드북 ──────────
+        nc_lc = GOLD
+        sh_bg = pygame.Surface((W - MX * 2, SEC_H), pygame.SRCALPHA)
+        sh_bg.fill((nc_lc[0] // 9, nc_lc[1] // 9, nc_lc[2] // 9, 180))
+        self.screen.blit(sh_bg, (MX, y_cur))
+        pygame.draw.line(self.screen, nc_lc, (MX, y_cur + SEC_H - 1),
+                         (W - MX, y_cur + SEC_H - 1), 1)
+        pygame.draw.rect(self.screen, nc_lc, (MX, y_cur, 3, SEC_H))
+        nc_hdr = self.font_game_tab.render("NO CAMERA MODE — KEYBOARD GUIDE", True, nc_lc)
+        self.screen.blit(nc_hdr, (MX + 9, y_cur + (SEC_H - nc_hdr.get_height()) // 2))
+        y_cur += SEC_H + 4
+
+        nc_h  = 88
+        nc_bg = pygame.Surface((W - MX * 2, nc_h), pygame.SRCALPHA)
+        nc_bg.fill((7, 4, 18, 210))
+        self.screen.blit(nc_bg, (MX, y_cur))
+        nc_border = (nc_lc[0] // 3, nc_lc[1] // 3, nc_lc[2] // 3)
+        pygame.draw.rect(self.screen, nc_border, (MX, y_cur, W - MX * 2, nc_h), 1, border_radius=6)
+
+        nc_rows = [
+            ("1 2 3 4 5 6 7", "주문 시전 (FIRE · WATER · WIND · EARTH · DARK · LIGHT · LIGHTNING)", True),
+            ("<-   ->", "고개 대신 화살표 키로 좌우 회피 (Dodge Left / Right)", True),
+            ("ESC / ENTER", "일시정지  ·  재도전 · 다음 스테이지로 이어가기", True),
+            ("C / V / R", "카메라 켜고끄기  ·  수정구 표시  ·  하이라이트 녹화 (인게임)", True),
+            ("메뉴  D / K / S", "오늘의 챌린지  ·  포즈 재확인  ·  앉은 자세 모드", False),
+        ]
+        row_h = nc_h // len(nc_rows)
+        for i, (key_lbl, desc, key_is_ascii) in enumerate(nc_rows):
+            ry = y_cur + i * row_h
+            key_font = self.font_game_tab if key_is_ascii else self.font_kor_small
+            key_s = key_font.render(key_lbl, True, nc_lc)
+            self.screen.blit(key_s, (MX + 16, ry + row_h // 2 - key_s.get_height() // 2))
+            desc_s = self.font_kor_small.render(desc, True, (170, 165, 185))
+            self.screen.blit(desc_s, (MX + 240, ry + row_h // 2 - desc_s.get_height() // 2))
+            if i < len(nc_rows) - 1:
+                pygame.draw.line(self.screen, (40, 35, 55),
+                                 (MX + 10, ry + row_h), (W - MX - 10, ry + row_h), 1)
+        y_cur += nc_h + 7
 
         # ── Back prompt with styled key-caps ───────────────────────────────
         remaining = H - y_cur
@@ -757,6 +884,39 @@ class FPRenderer:
         self.screen.blit(ret_s, ret_s.get_rect(center=(W // 2, ky_ + kh_ + 16)))
 
         pygame.display.flip()
+
+    def draw_gesture_icon(
+        self,
+        cx: int,
+        cy: int,
+        icon: str,
+        color: Tuple[int, int, int],
+        tick: int,
+        scale: float = 1.0,
+        target: Optional[pygame.Surface] = None,
+    ) -> None:
+        """제스처 아이콘 그리기(공개 API — 캘리브레이션 화면도 같은 그림을 쓴다).
+
+        아이콘 원본은 반지름 14px 로 고정돼 있어 온보딩 화면에서는 너무 작다.
+        `scale` 을 주면 작은 서피스에 한 번 그린 뒤 확대해서 붙인다.
+        """
+        dest = target if target is not None else self.screen
+        if scale == 1.0 and target is None:
+            self._draw_gesture_icon(cx, cy, icon, color, tick)
+            return
+
+        size = 48
+        tmp = pygame.Surface((size, size), pygame.SRCALPHA)
+        prev = self.screen
+        self.screen = tmp                      # 그리기 대상만 잠시 바꾼다
+        try:
+            self._draw_gesture_icon(size // 2, size // 2, icon, color, tick)
+        finally:
+            self.screen = prev
+        out = int(size * scale)
+        if out != size:
+            tmp = pygame.transform.smoothscale(tmp, (out, out))
+        dest.blit(tmp, (cx - tmp.get_width() // 2, cy - tmp.get_height() // 2))
 
     def _draw_gesture_icon(
         self, cx: int, cy: int, icon: str, color: Tuple[int, int, int], tick: int
@@ -800,6 +960,29 @@ class FPRenderer:
             self._draw_arrow_shape(cx, cy, math.pi / 2, col)
         elif icon == "left":
             self._draw_arrow_shape(cx, cy, -math.pi / 2, col)
+        elif icon == "dual_same":
+            # 같은 손 두 개가 마주 본다 → 증폭
+            for side in (-1, 1):
+                bx = cx + side * 9
+                for i in range(3):
+                    a = math.radians(-40 + i * 40)
+                    pygame.draw.line(self.screen, col, (bx, cy + 5),
+                                     (bx + int(math.sin(a) * 8), cy + 5 - int(math.cos(a) * 10)), 2)
+            pygame.draw.circle(self.screen, col, (cx, cy - 10), 3)
+        elif icon == "dual_diff":
+            # 서로 다른 두 손(펼침 + 주먹)이 합쳐지는 모양 → 융합
+            for i in range(3):
+                a = math.radians(-40 + i * 40)
+                pygame.draw.line(self.screen, col, (cx - 9, cy + 5),
+                                 (cx - 9 + int(math.sin(a) * 8), cy + 5 - int(math.cos(a) * 10)), 2)
+            pygame.draw.circle(self.screen, col, (cx + 9, cy - 2), 6, 2)
+            pygame.draw.line(self.screen, col, (cx - 2, cy + 8), (cx + 2, cy + 8), 2)
+        elif icon == "mana":
+            # 차오르는 물방울 — 자원 회복
+            pygame.draw.circle(self.screen, col, (cx, cy + 2), 8, 2)
+            pygame.draw.line(self.screen, col, (cx - 6, cy - 5), (cx, cy - 12), 2)
+            pygame.draw.line(self.screen, col, (cx + 6, cy - 5), (cx, cy - 12), 2)
+            pygame.draw.line(self.screen, col, (cx - 4, cy + 4), (cx + 4, cy + 4), 2)
         elif icon == "circle":
             pygame.draw.circle(self.screen, col, (cx, cy), r, 2)
             dot_a = tick * 0.08
@@ -854,12 +1037,29 @@ class FPRenderer:
         dt_ms:             int = 16,
         gesture_trail:     Optional[List[Tuple[float, float]]] = None,
         gesture_drawing:   bool = False,
+        boss_name:         str = "ARCANE BOSS",
+        boss_accent:       Optional[Tuple[int, int, int]] = None,
+        score:             int = 0,
+        stage_index:       int = 1,
+        stage_count:       int = 1,
+        # ── 이번 업그레이드에서 추가된 HUD (hud_ext 가 그린다) ──
+        mana_ratio:        float = 1.0,
+        mana_exhausted:    bool = False,
+        mana_cost_preview: float = 0.0,
+        rune_summary:      Optional[Sequence[Tuple[str, int]]] = None,
+        rune_colors:       Optional[Sequence[Tuple[int, int, int]]] = None,
+        dual_progress:     float = 0.0,
+        dual_poses:        Optional[Tuple[str, str]] = None,
+        orb:               Optional[object] = None,
+        orb_center:        Optional[Tuple[int, int]] = None,
+        orb_accent:        Tuple[int, int, int] = (150, 120, 255),
+        player_max_hp:     int = PLAYER_MAX_HP,
     ) -> None:
         self._tick += 1
-        
+
         # 파티클 업데이트
         self.update_particles(dt_ms)
-        
+
         # 카메라 쉐이크 오프셋
         shake_x, shake_y = self.update_camera_shake(dt_ms)
 
@@ -870,7 +1070,8 @@ class FPRenderer:
         self._draw_atmosphere(player_offset_x)
 
         # 2. Boss (behind effects)
-        self._draw_boss(boss_hp / BOSS_MAX_HP, effects, player_offset_x)
+        self._draw_boss(boss_hp / BOSS_MAX_HP, effects, player_offset_x,
+                        boss_name=boss_name, accent=boss_accent)
 
         # 3. Effects (projectiles)
         self._draw_effects(effects, player_offset_x)
@@ -890,10 +1091,34 @@ class FPRenderer:
             self._draw_gesture_trail(gesture_trail, gesture_drawing)
 
         # 6. HUD
-        self._draw_hud(player_hp, boss_hp, shield_time_left, lightning_cd_left, difficulty)
+        self._draw_hud(player_hp, boss_hp, shield_time_left, lightning_cd_left, difficulty,
+                       score, stage_index, stage_count, player_max_hp)
+
+        # 6.3. 마나 게이지 — HP 바(좌하단) 바로 위. 플레이어 자원은 한곳에 모은다.
+        hud_ext.draw_mana_bar(
+            self.screen, self.font,
+            pygame.Rect(18, self.H - 86, 210, 12),
+            mana_ratio, mana_exhausted, self._tick,
+            cost_preview=mana_cost_preview,
+        )
+
+        # 6.4. 획득 룬 칩 — 좌상단(전투 중 흘깃 보는 정보라 시야 중앙에서 뺀다)
+        if rune_summary:
+            hud_ext.draw_rune_chips(self.screen, self.font, 18, 20,
+                                    rune_summary, rune_colors, max_width=520)
+
+        # 6.5. 듀얼 캐스팅 게이지 — 화면 하단 중앙(양손이 모이는 중일 때만)
+        if dual_progress > 0.0:
+            hud_ext.draw_dual_gauge(self.screen, self.font,
+                                    (self.W // 2, self.H - 96),
+                                    dual_progress, dual_poses)
+
+        # 6.6. 점술 수정구(인게임 웹캠) — 클립에 "사람"이 남게 하는 핵심 요소
+        if orb is not None and orb_center is not None:
+            orb.render(self.screen, orb_center, self._tick, accent=orb_accent)
 
         # 6.7. 위급 시 심장박동 비네트 (HP 낮을수록 빠르고 강하게)
-        hp_ratio = player_hp / PLAYER_MAX_HP
+        hp_ratio = player_hp / max(1, player_max_hp)
         if 0.0 < hp_ratio < DANGER_HP_RATIO:
             self._draw_danger_vignette(hp_ratio)
 
@@ -950,10 +1175,28 @@ class FPRenderer:
             c = (min(255, int(90 + peak * fade)), int(12 * fade), int(24 * fade))
             pygame.draw.rect(self.screen, c, (w, w, W - w * 2, H - w * 2), 1)
 
-    def render_ending(self, state: str, tick: int) -> None:
-        """Render game_over or you_win ending screen."""
+    def render_ending(
+        self,
+        state: str,
+        tick: int,
+        stats: Optional[dict] = None,
+        score: int = 0,
+        is_new_record: bool = False,
+        can_continue: bool = False,
+        chain_score: int = 0,
+        next_boss_name: str = "",
+        card_path: str = "",
+        clip_path: str = "",
+    ) -> List[Tuple[pygame.Rect, str, Optional[str]]]:
+        """Render game_over/you_win ending screen with run stats + RETRY/MENU buttons.
+
+        Returns clickables [(rect, action, None)] — action: "retry" | "menu".
+        """
         self._tick += 1
         W, H = self.W, self.H
+        stats = stats or {}
+        clickables: List[Tuple[pygame.Rect, str, Optional[str]]] = []
+
         # Dim background
         self._draw_bg(0.0)
         if self._end_ov is None:
@@ -964,39 +1207,129 @@ class FPRenderer:
             self._end_ov.fill((20, 10, 50, 150))
         self.screen.blit(self._end_ov, (0, 0))
 
+        boss_name   = stats.get("boss_name") or "the Arcane Boss"
+        stage_idx   = int(stats.get("stage_index", 1))
+        stage_count = int(stats.get("stage_count", 1))
         if state == "game_over":
             title_col = self._pulse_color((200, 40, 40), (255, 80, 80), tick, 50)
             title_txt = "GAME OVER"
-            sub_txt   = "You were defeated by the Arcane Boss..."
+            sub_txt   = f"You were defeated by {boss_name}..."
+        elif can_continue:
+            title_col = self._pulse_color((190, 190, 196), WHITE, tick, 50)
+            title_txt = f"STAGE {stage_idx} CLEAR!"
+            sub_txt   = f"{boss_name} falls — {next_boss_name} awaits."
+        elif stage_idx >= stage_count:
+            title_col = self._pulse_color((255, 210, 90), WHITE, tick, 40)
+            title_txt = "GAUNTLET CLEARED!"
+            sub_txt   = f"{boss_name} was the last stand — you beat the full gauntlet!"
         else:
             title_col = self._pulse_color((190, 190, 196), WHITE, tick, 50)
             title_txt = "VICTORY!"
-            sub_txt   = "The Arcane Boss has been vanquished!"
+            sub_txt   = f"{boss_name} vanquished — higher difficulty unlocks more stages"
 
-        # Expanding ring animation
+        # Expanding ring animation (behind title)
+        ring_cy = H // 2 - 130
         ring_r = int(80 + tick * 1.2) % 300
         ring_col = self._pulse_color(tuple(c // 3 for c in title_col), title_col, tick, 40)
-        pygame.draw.circle(self.screen, ring_col, (W // 2, H // 2), ring_r, 2)
-        pygame.draw.circle(self.screen, ring_col, (W // 2, H // 2), max(1, ring_r - 20), 1)
+        pygame.draw.circle(self.screen, ring_col, (W // 2, ring_cy), ring_r, 2)
+        pygame.draw.circle(self.screen, ring_col, (W // 2, ring_cy), max(1, ring_r - 20), 1)
 
         # Title
-        tf = pygame.font.SysFont(None, 80)
+        tf = pygame.font.SysFont(None, 72)
         title_surf = tf.render(title_txt, True, title_col)
         shadow_surf = tf.render(title_txt, True, (0, 0, 0))
-        tc = title_surf.get_rect(center=(W // 2, H // 2 - 60))
+        tc = title_surf.get_rect(center=(W // 2, H // 2 - 168))
         self.screen.blit(shadow_surf, (tc.x + 4, tc.y + 4))
         self.screen.blit(title_surf, tc)
 
         # Subtitle
         sub_surf = self.font_big.render(sub_txt, True, TEXT_SECONDARY)
-        self.screen.blit(sub_surf, sub_surf.get_rect(center=(W // 2, H // 2 + 20)))
+        self.screen.blit(sub_surf, sub_surf.get_rect(center=(W // 2, H // 2 - 122)))
+
+        # ── Run-stats panel ─────────────────────────────────────────────────
+        pw, ph = 560, 186
+        px, py = W // 2 - pw // 2, H // 2 - 82
+        panel = pygame.Surface((pw, ph), pygame.SRCALPHA)
+        panel.fill((10, 10, 14, 215))
+        self.screen.blit(panel, (px, py))
+        pygame.draw.rect(self.screen, HAIRLINE, (px, py, pw, ph), 1, border_radius=10)
+
+        time_ms = int(stats.get("time_ms", 0))
+        tsec = time_ms // 1000
+        time_str = f"{tsec // 60:01d}:{tsec % 60:02d}"
+        landed = int(stats.get("hits_landed", 0))
+        missed = int(stats.get("hits_missed", 0))
+        total_shots = landed + missed
+        acc = int(round(100 * landed / total_shots)) if total_shots else 0
+
+        rows = [
+            ("TIME",        time_str,                           TEXT_PRIMARY),
+            ("DMG DEALT",   str(stats.get("dmg_dealt", 0)),      GREEN),
+            ("DMG TAKEN",   str(stats.get("dmg_taken", 0)),      RED),
+            ("ACCURACY",    f"{acc}%",                           CYAN),
+            ("SPELLS CAST", str(stats.get("spells_cast", 0)),    TEXT_PRIMARY),
+            ("BEST SCORE",  str(stats.get("best_score", score)), GOLD),
+        ]
+        col_w = pw // 3
+        for i, (label, value, col) in enumerate(rows):
+            ccx = px + col_w * (i % 3) + col_w // 2
+            ccy = py + 26 + (i // 3) * 80
+            lbl_s = self.font_game_tab.render(label, True, TEXT_SECONDARY)
+            self.screen.blit(lbl_s, lbl_s.get_rect(center=(ccx, ccy)))
+            val_s = self.font_big.render(value, True, col)
+            self.screen.blit(val_s, val_s.get_rect(center=(ccx, ccy + 26)))
+
+        pygame.draw.line(self.screen, RUNE_DIM, (px + 16, py + ph - 38), (px + pw - 16, py + ph - 38), 1)
+
+        score_txt = f"STAGE {score}  ·  CHAIN {chain_score}"
+        score_col: Tuple[int, int, int] = GOLD if is_new_record else TEXT_PRIMARY
+        if is_new_record:
+            score_txt += "  ★ BEST"
+            score_col = self._pulse_color((255, 210, 60), WHITE, tick, 18)
+        score_s = self.font_game_tab.render(score_txt, True, score_col)
+        self.screen.blit(score_s, score_s.get_rect(center=(px + pw // 2, py + ph - 18)))
+
+        # ── Buttons ──────────────────────────────────────────────────────────
+        if can_continue:
+            # 3버튼: 다음 스테이지로 이어가기(주 액션) / 이 스테이지 재도전 / 메인 메뉴
+            btn_continue = pygame.Rect(W // 2 - 300, py + ph + 22, 300, 52)
+            btn_retry    = pygame.Rect(W // 2 + 4,    py + ph + 22, 148, 52)
+            btn_menu     = pygame.Rect(W // 2 + 158,  py + ph + 22, 148, 52)
+            self._draw_hero_button(btn_continue, f"CONTINUE -> STAGE {stage_idx + 1}")
+            self._draw_button(btn_retry, "RETRY", self.font_game_tab)
+            self._draw_button(btn_menu, "MENU", self.font_game_tab)
+            clickables.append((btn_continue, "continue", None))
+            clickables.append((btn_retry, "retry_stage", None))
+            clickables.append((btn_menu, "menu", None))
+            hint = "Press ENTER to continue the chain"
+        else:
+            # 2버튼: 체인 종료 — 처음부터 재도전 / 메인 메뉴
+            btn_retry = pygame.Rect(W // 2 - 210, py + ph + 22, 200, 52)
+            btn_menu  = pygame.Rect(W // 2 + 10,  py + ph + 22, 200, 52)
+            self._draw_hero_button(btn_retry, "RETRY")
+            self._draw_button(btn_menu, "MAIN MENU", self.font_game_tab)
+            clickables.append((btn_retry, "retry", None))
+            clickables.append((btn_menu, "menu", None))
+            hint = "Press ENTER to retry from Stage 1"
 
         # Prompt (blink)
         if (tick // 30) % 2 == 0:
-            prompt = self.font.render("Press ENTER or SPACE to return to menu", True, WHITE)
-            self.screen.blit(prompt, prompt.get_rect(center=(W // 2, H // 2 + 70)))
+            prompt = self.font.render(hint, True, WHITE)
+            self.screen.blit(prompt, prompt.get_rect(center=(W // 2, py + ph + 90)))
+
+        # 저장된 공유물을 알린다 — 찾아가야 할 경로라 깜빡이지 않게 고정 표시
+        saved = []
+        if clip_path:
+            saved.append(("HIGHLIGHT CLIP", clip_path, (255, 205, 110)))
+        if card_path:
+            saved.append(("SHARE CARD", card_path, (150, 200, 255)))
+        for i, (label, path, col) in enumerate(saved):
+            y = H - 22 - (len(saved) - 1 - i) * 20
+            note = self.font.render(f"{label} SAVED  ->  {path}", True, col)
+            self.screen.blit(note, note.get_rect(center=(W // 2, y)))
 
         pygame.display.flip()
+        return clickables
 
     def render_pause(
         self,
@@ -1184,10 +1517,12 @@ class FPRenderer:
                 cool = max(0.0, (t - 0.4) * 1.4)
                 col = (int(30 * warm), int(10 * warm), int(24 * cool), 14)
                 pygame.draw.line(g, col, (0, y), (W, y), 2)
-            # 비네트: 가장자리를 점진적으로 어둡게
+            # 비네트: 가장자리를 점진적으로 어둡게 (기존보다 살짝 더 깊게 —
+            # 아케이드 포스터처럼 화면 전체가 고르게 밝은 느낌을 줄인다)
             steps = 90
             for i in range(steps):
-                a = int(120 * (i / steps) ** 2.4)
+                # 가장자리(i=0)가 가장 어둡고 안쪽으로 갈수록 0으로 사라진다.
+                a = int(150 * (1.0 - i / steps) ** 2.3)
                 pygame.draw.rect(g, (0, 0, 0, a), (i, i, W - i * 2, H - i * 2), 1)
             self._grade_cache = g
             # 그레인 타일 6장 미리 생성(128×128) → 매 프레임 1장 골라 타일 blit
@@ -1211,7 +1546,14 @@ class FPRenderer:
 
     # ── Boss ───────────────────────────────────────────────────────────────────
 
-    def _draw_boss(self, hp_ratio: float, effects: List[dict], player_offset_x: float = 0.0) -> None:
+    def _draw_boss(
+        self,
+        hp_ratio: float,
+        effects: List[dict],
+        player_offset_x: float = 0.0,
+        boss_name: str = "ARCANE BOSS",
+        accent: Optional[Tuple[int, int, int]] = None,
+    ) -> None:
         W, H = self.W, self.H
         enraged = hp_ratio <= 0.35
 
@@ -1307,12 +1649,14 @@ class FPRenderer:
 
         # ── 3D 구체 몸체 (상-좌 광원, 레이어드 원으로 구현) ─────────────────
         # 가장 어두운 외곽 → 상-좌 쪽으로 offset된 밝은 레이어 = 입체감
+        # 채도를 낮추고 명암 대비를 키운 "그림다크" 팔레트 — 원색 오렌지/빨강
+        # 대신 탁한 피·녹 계열로 눌러 아케이드 토이보다 짐승 가죽에 가깝게.
         layers_3d = [
-            (0,   0,   R,      (22,  3,  3)),
-            (-4, -4,   R - 9,  (105, 18, 18) if not enraged else (148, 22,  8)),
-            (-10,-10,  R - 21, (168, 40, 22) if not enraged else (218, 55, 12)),
-            (-16,-17,  R - 35, (218, 65, 38) if not enraged else (255, 88, 18)),
-            (-21,-23,  R - 49, (248, 96, 58) if not enraged else (255,125, 32)),
+            (0,   0,   R,      (14,  2,  3)),
+            (-4, -4,   R - 9,  (72,  16, 16) if not enraged else (120, 20,  9)),
+            (-10,-10,  R - 21, (112, 32, 20) if not enraged else (188, 48, 13)),
+            (-16,-17,  R - 35, (148, 52, 33) if not enraged else (232, 78, 20)),
+            (-21,-23,  R - 49, (176, 78, 48) if not enraged else (255,112, 34)),
         ]
         for ox, oy, lr, lc in layers_3d:
             if lr > 0:
@@ -1328,23 +1672,23 @@ class FPRenderer:
         pygame.draw.circle(ss, (*ss_col, int(40 + 40 * breathe)), (ss_r, ss_r), int(ss_r * 0.6))
         self.screen.blit(ss, (cx - ss_r - 14, cy - ss_r - 16), special_flags=pygame.BLEND_RGBA_ADD)
 
-        # 외곽 림 라이트 (뒷면 역광)
+        # 외곽 림 라이트 (뒷면 역광) — 채도를 낮춰 플라스틱 토이 느낌을 줄임
         if enraged:
-            rim_c = self._pulse_color((255, 70, 0), (255, 180, 0), self._tick, 20)
+            rim_c = self._pulse_color((190, 60, 10), (235, 130, 20), self._tick, 20)
         else:
-            rim_c = (190, 55, 55)
+            rim_c = (120, 42, 42)
         pygame.draw.circle(self.screen, rim_c, (cx, cy), R, 3)
 
-        # 반사광 하이라이트 (소프트)
+        # 반사광 하이라이트 (소프트, 은은하게 — 광택 대신 젖은 가죽 질감)
         if self._boss_hl_r != R:
             self._boss_hl_surf = pygame.Surface((R, R), pygame.SRCALPHA)
-            pygame.draw.circle(self._boss_hl_surf, (255, 200, 160, 85),
+            pygame.draw.circle(self._boss_hl_surf, (210, 160, 130, 55),
                                (R // 2 - 9, R // 2 - 11), R // 3)
             self._boss_hl_r = R
         self.screen.blit(self._boss_hl_surf, (cx - R // 2 - 9, cy - R // 2 - 11))
-        # 정반사 점
-        pygame.draw.circle(self.screen, (255, 205, 165), (cx - 26, cy - 30), 7)
-        pygame.draw.circle(self.screen, (255, 248, 240), (cx - 28, cy - 32), 3)
+        # 정반사 점 (작고 은은하게 — 만화적 반짝임 대신 젖은 표면 느낌)
+        pygame.draw.circle(self.screen, (200, 160, 140), (cx - 26, cy - 30), 5)
+        pygame.draw.circle(self.screen, (235, 210, 195), (cx - 28, cy - 32), 2)
 
         # ── 턱 (완전한 구체 실루엣을 깨서 해골/얼굴 형태로) ─────────────────
         jaw_col = (150, 34, 20) if not enraged else (200, 48, 10)
@@ -1413,12 +1757,13 @@ class FPRenderer:
             ex_abs = cx + ex_off + look_dx // 2
             ey_abs = cy - 14
             pygame.draw.circle(self.screen, (0, 0, 0), (ex_abs, ey_abs), 13)
+            # 만화적인 원색 노랑 대신 잉걸불처럼 탁한 호박색 — 더 섬뜩하게
             if is_hit:
-                iris_c = (255, 255, 100)
+                iris_c = (235, 210, 110)
             elif enraged:
-                iris_c = self._pulse_color((255, 100, 0), (255, 220, 0), self._tick, 20)
+                iris_c = self._pulse_color((205, 70, 10), (235, 150, 15), self._tick, 20)
             else:
-                iris_c = self._pulse_color((255, 80, 40), (255, 220, 60), self._tick, 50)
+                iris_c = self._pulse_color((190, 60, 30), (215, 150, 45), self._tick, 50)
             pygame.draw.circle(self.screen, iris_c, (ex_abs, ey_abs), 8)
             p_off = max(-3, min(3, look_dx // 3))
             pupil = [
@@ -1428,7 +1773,7 @@ class FPRenderer:
                 (ex_abs + p_off - 2, ey_abs),
             ]
             pygame.draw.polygon(self.screen, (0, 0, 0), pupil)
-            pygame.draw.circle(self.screen, WHITE, (ex_abs - 4 + p_off, ey_abs - 4), 2)
+            pygame.draw.circle(self.screen, (200, 190, 160), (ex_abs - 4 + p_off, ey_abs - 4), 2)
 
         # ── 입 (공격 모션: 열림) ─────────────────────────────────────────────
         if is_attacking:
@@ -1437,7 +1782,7 @@ class FPRenderer:
                             (cx - 30, cy + 8, 60, 26), math.pi, 2 * math.pi, 3)
             for i in range(5):
                 tx = cx - 22 + i * 11
-                pygame.draw.polygon(self.screen, WHITE,
+                pygame.draw.polygon(self.screen, BONE,
                                     [(tx, cy + 16), (tx + 5, cy + 16), (tx + 2, cy + 22)])
             ec = self._pulse_color((255, 60, 0), (255, 200, 100), self._tick, 12)
             pygame.draw.ellipse(self.screen, ec, (cx - 14, cy + 24, 28, 10))
@@ -1447,7 +1792,7 @@ class FPRenderer:
             for i in range(5):
                 tx = cx - 24 + i * 12
                 th = 11 if (enraged and i % 2 == 0) else 7
-                pygame.draw.polygon(self.screen, WHITE,
+                pygame.draw.polygon(self.screen, BONE,
                                     [(tx, cy + 16), (tx + 6, cy + 16), (tx + 3, cy + 16 + th)])
 
         # ── 어깨·팔 (머리만 떠 있지 않도록 몸통 매스를 붙임 — 얼굴을 다 그린
@@ -1539,6 +1884,21 @@ class FPRenderer:
             atk_c = self._pulse_color((255, 100, 0), (255, 230, 0), self._tick, 8)
             pygame.draw.circle(self.screen, atk_c, (cx, cy), R + 8, 5)
 
+        # ── 보스별 오라 링(팔레트 배리언트) ──────────────────────────────────
+        # accent가 있으면 실루엣 "바깥"에 얇은 원소색 링 3겹을 두른다. 이전에는
+        # SRCALPHA 표면 + BLEND_RGBA_ADD로 그라디언트 도넛을 만들었는데, 알파
+        # 채널이 기대만큼 반영되지 않아(가산 블렌드가 알파를 무시) 안쪽까지
+        # 거의 불투명하게 덮여 보스가 "그냥 원"처럼 보이는 버그가 났다.
+        # 이 코드베이스의 다른 링 이펙트(피격 링/공격 플래시 링 등)와 동일하게
+        # — 얇은 stroke만 그려 실루엣을 절대 가리지 않는, 검증된 방식으로 통일.
+        if accent is not None:
+            base_r = R + 22
+            for k in range(3):
+                rr = base_r + k * 13 + int(4 * math.sin(self._tick * 0.06 + k * 1.7))
+                fade = 1.0 - k * 0.3
+                ring_col = tuple(max(0, min(255, int(c * fade))) for c in accent)
+                pygame.draw.circle(self.screen, ring_col, (cx, cy), rr, 2)
+
         # ── HP 바 ─────────────────────────────────────────────────────────────
         bw, bh = 200, 14
         bx = cx - bw // 2
@@ -1551,7 +1911,7 @@ class FPRenderer:
             pygame.draw.rect(self.screen, fill_col,
                              (bx, by, int(bw * hp_ratio), bh), border_radius=5)
         pygame.draw.rect(self.screen, GREY, (bx, by, bw, bh), 1, border_radius=5)
-        lbl_txt = "!! ARCANE BOSS — ENRAGED !!" if enraged else "ARCANE BOSS"
+        lbl_txt = f"!! {boss_name} — ENRAGED !!" if enraged else boss_name
         lbl_col = (255, 110, 0) if enraged else GREY
         hp_lbl  = self.font.render(lbl_txt, True, lbl_col)
         self.screen.blit(hp_lbl, hp_lbl.get_rect(center=(cx, by - 14)))
@@ -1870,11 +2230,25 @@ class FPRenderer:
         shield_time_left:  int,
         lightning_cd_left: int,
         difficulty:        str,
+        score:             int = 0,
+        stage_index:       int = 1,
+        stage_count:       int = 1,
+        player_max_hp:     int = PLAYER_MAX_HP,
     ) -> None:
         W, H = self.W, self.H
 
         # Player HP (bottom-left panel)
-        self._draw_hp_panel(18, H - 56, 210, 18, player_hp, PLAYER_MAX_HP, GREEN, "HP")
+        # 최대 HP 는 룬(SECOND WIND)으로 늘어날 수 있으므로 상수가 아니라 인자를 쓴다.
+        self._draw_hp_panel(18, H - 56, 210, 18, player_hp, max(1, player_max_hp), GREEN, "HP")
+
+        # Live score readout (top-right, above difficulty badge)
+        score_s = self.font_game_tab.render(f"SCORE  {score}", True, TEXT_PRIMARY)
+        self.screen.blit(score_s, (W - score_s.get_width() - 82, 44))
+
+        # Stage indicator (only meaningful once there's more than one stage)
+        if stage_count > 1:
+            stage_s = self.font_game_tab.render(f"STAGE {stage_index}/{stage_count}", True, GOLD)
+            self.screen.blit(stage_s, (W - stage_s.get_width() - 82, 68))
 
         # Status chips (right side, stacked upward)
         chip_x = W - 190
@@ -2401,35 +2775,8 @@ class FPRenderer:
 
     @staticmethod
     def _make_kor_font(size: int) -> pygame.font.Font:
-        """Returns a bold font capable of rendering Korean characters.
-
-        Windows 폰트 파일을 직접 로드하여 SysFont fallback 시 깨지는 문제를 방지한다.
-        """
-        import os
-        # 직접 파일 로드 (가장 안정적 — Windows 기본 한국어 폰트)
-        win_paths = [
-            "C:/Windows/Fonts/malgunbd.ttf",   # Malgun Gothic Bold
-            "C:/Windows/Fonts/malgun.ttf",     # Malgun Gothic Regular
-            "C:/Windows/Fonts/gulim.ttc",      # 굴림
-            "C:/Windows/Fonts/dotum.ttc",      # 돋움
-            "C:/Windows/Fonts/batang.ttc",     # 바탕
-        ]
-        for path in win_paths:
-            if os.path.exists(path):
-                try:
-                    return pygame.font.Font(path, size)
-                except Exception:
-                    pass
-        # SysFont fallback (bold 제거 — 깨짐 방지)
-        for name in ("malgungothic", "malgun gothic", "gulim", "dotum", "batang"):
-            try:
-                f = pygame.font.SysFont(name, size)
-                if f is not None:
-                    return f
-            except Exception:
-                pass
-        # 최후 fallback — 한국어 미지원일 수 있음
-        return pygame.font.SysFont(None, size)
+        """한글을 렌더할 수 있는 폰트. 구현은 hud_ext.korean_font 로 일원화되어 있다."""
+        return hud_ext.korean_font(size)
 
     @staticmethod
     def _pulse_color(

@@ -18,19 +18,24 @@ _RING_MCP     = 13; _RING_PIP = 14; _RING_TIP = 16
 _PINKY_MCP    = 17; _PINKY_PIP = 18; _PINKY_TIP = 20
 
 _EXT_MARGIN = 0.025   # 랜드마크 정규화 코오디네이트 단위 마진
+_THUMB_MARGIN = 0.06  # 엄지 세움 판정 마진
 
 
-def _ext(lm: Any, tip: int, pip: int) -> bool:
+def _ext(lm: Any, tip: int, pip: int, margin: float = _EXT_MARGIN) -> bool:
     """손가락이 펼쳐졌는지 (tip.y < pip.y - margin)."""
-    return lm[tip].y < lm[pip].y - _EXT_MARGIN
+    return lm[tip].y < lm[pip].y - margin
 
 
-def _thumb_up(lm: Any) -> bool:
+def _thumb_up(lm: Any, margin: float = _THUMB_MARGIN) -> bool:
     """엄지가 위를 향하는지: tip이 MCP보다 좌우무관하게 높이 위치."""
-    return lm[_THUMB_TIP].y < lm[_THUMB_MCP].y - 0.06
+    return lm[_THUMB_TIP].y < lm[_THUMB_MCP].y - margin
 
 
-def _detect_pose(lm: Any) -> Optional[str]:
+def _detect_pose(
+    lm: Any,
+    ext_margin: float = _EXT_MARGIN,
+    thumb_margin: float = _THUMB_MARGIN,
+) -> Optional[str]:
     """손 모양(21랜드마크)으로 마법 발동 포즈를 분류합니다.
 
     - FIRE  : 손바닥 펼치기  (4손가락 모두 펼쳐짐)
@@ -38,11 +43,11 @@ def _detect_pose(lm: Any) -> Optional[str]:
     - EARTH : 엄지첨  (엄지만 위를 향하고 나머지 접힌)
     - WIND  : 검지만 펼기 (검지만 펼치고 나머지 접힌)
     """
-    idx = _ext(lm, _INDEX_TIP,  _INDEX_PIP)
-    mid = _ext(lm, _MIDDLE_TIP, _MIDDLE_PIP)
-    rng = _ext(lm, _RING_TIP,   _RING_PIP)
-    pky = _ext(lm, _PINKY_TIP,  _PINKY_PIP)
-    thb = _thumb_up(lm)
+    idx = _ext(lm, _INDEX_TIP,  _INDEX_PIP,  ext_margin)
+    mid = _ext(lm, _MIDDLE_TIP, _MIDDLE_PIP, ext_margin)
+    rng = _ext(lm, _RING_TIP,   _RING_PIP,   ext_margin)
+    pky = _ext(lm, _PINKY_TIP,  _PINKY_PIP,  ext_margin)
+    thb = _thumb_up(lm, thumb_margin)
     n_ext = idx + mid + rng + pky
 
     if n_ext >= 4:
@@ -69,10 +74,47 @@ class GestureConfig:
     horizontal_ratio: float = 0.65   # LIGHT/DARK 수평 우세 비율
 
     # 포즈 기반 (FIRE/WATER/EARTH/WIND)
-    pose_hold_frames: int = 8        # 발동까지 유지 프레임 (반응 빠르게)
-    pose_cooldown_frames: int = 22   # 연속 발동 방지 쿨다운 (재시전 지연 감소)
+    # 시전 속도는 이제 마나(mana.py)가 제한하므로, 인식 지연으로 속도를 묶을
+    # 이유가 없어졌다. 홀드·쿨다운을 줄여 손짓 → 발동의 체감 지연을 낮춘다.
+    pose_hold_frames: int = 5        # 발동까지 유지 프레임 (8 → 5: 즉발감 확보)
+    pose_cooldown_frames: int = 13   # 연속 발동 방지 쿨다운 (22 → 13)
+    # 양손 동시 시전(듀얼 캐스팅) — 두 손이 같은 순간 판정을 낸다는 것 자체가
+    # 강한 신호라, 한 손보다 짧게 잡아도 오인식이 잘 생기지 않는다.
+    dual_hold_frames: int = 4
+    dual_cooldown_frames: int = 20   # 증폭/융합은 위력이 크므로 쿨다운은 길게
+
+    # 손 모양 판정 여유. 앉아서 팔꿈치를 책상에 둔 채 플레이하면 손이 낮고
+    # 기울어져 잡히기 때문에, 서 있을 때와 같은 문턱을 쓰면 인식률이 떨어진다.
+    ext_margin: float = _EXT_MARGIN
+    thumb_margin: float = _THUMB_MARGIN
     pose_miss_decay: int = 2         # 홀드 중 인식 실패 1프레임당 카운터 감소량
                                      # (리셋 대신 감쇠 → 손 떨림에도 스펠이 잘 나감)
+
+
+def seated_config(base: GestureConfig | None = None) -> GestureConfig:
+    """앉은 자세(팔꿈치 지지) 프리셋.
+
+    고릴라 암 연구의 결론은 "몸 가까이, 낮은 높이, 짧은 유지"다. 그래서
+    세 가지를 함께 완화한다 — 판정 여유를 키우고(기울어진 손도 잡히게),
+    유지 프레임을 줄이고(팔을 드는 시간 자체를 줄인다), 궤적 최소 길이를
+    낮춘다(작게 그어도 인식되게).
+    """
+    b = base or GestureConfig()
+    return GestureConfig(
+        resample_points=b.resample_points,
+        min_length_px=b.min_length_px * 0.72,    # 작은 손동작도 궤적으로 인정
+        circle_close_ratio=b.circle_close_ratio * 1.15,
+        zigzag_min_turns=b.zigzag_min_turns,
+        sharp_turn_deg=b.sharp_turn_deg - 5.0,
+        horizontal_ratio=b.horizontal_ratio * 0.9,
+        pose_hold_frames=max(3, b.pose_hold_frames - 1),
+        pose_cooldown_frames=b.pose_cooldown_frames,
+        dual_hold_frames=max(3, b.dual_hold_frames - 1),
+        dual_cooldown_frames=b.dual_cooldown_frames,
+        ext_margin=b.ext_margin * 0.6,           # 손이 기울어도 "폈다"로 인정
+        thumb_margin=b.thumb_margin * 0.6,
+        pose_miss_decay=b.pose_miss_decay,
+    )
 
 
 class GestureAnalyzer:
@@ -111,7 +153,8 @@ class GestureAnalyzer:
                 self._hold_counter = 0
             return None
 
-        detected = _detect_pose(landmarks) if landmarks is not None else None
+        detected = (_detect_pose(landmarks, self._cfg.ext_margin, self._cfg.thumb_margin)
+                    if landmarks is not None else None)
 
         if detected is not None and detected == self._current_pose:
             # 같은 포즈 유지 → 진행
@@ -281,3 +324,137 @@ def _count_turns(pts: Trajectory, deg_threshold: float) -> int:
         if ang <= (180.0 - deg_threshold):
             turns += 1
     return turns
+
+# ── 듀얼 캐스팅 (양손 동시 시전) ─────────────────────────────────────────────
+# 규칙은 한 줄로 가르칠 수 있을 만큼 단순해야 한다:
+#   같은 손모양 두 개  → 증폭(AMPLIFY)  : 그 주문이 강화되어 나간다
+#   다른 손모양 두 개  → 융합(FUSION)   : 두 원소가 합쳐진 상위 주문이 나간다
+#
+# 기존 콤보(spell_combo.py)는 1.2초 안에 두 주문을 "순차로" 성공시켜야 해서
+# 실패율이 높았다. 양손을 쓰면 같은 조합을 "동시에" 만들 수 있으므로,
+# 콤보가 타이밍 곡예가 아니라 손 모양 문제로 바뀐다.
+
+# 서로 다른 두 원소의 융합 결과. 좌우 구분이 없도록 정렬된 키로 저장한다.
+_FUSION_RULES: dict = {
+    ("FIRE", "WATER"): "STEAM",         # 불 + 물 → 수증기
+    ("FIRE", "WIND"): "TORNADO",        # 불 + 바람 → 화염 회오리
+    ("EARTH", "FIRE"): "STONE_BULLET",  # 흙 + 불 → 용암탄
+    ("WATER", "WIND"): "ICE_SHARD",     # 물 + 바람 → 얼음 파편
+    ("EARTH", "WATER"): "MUD",          # 흙 + 물 → 진흙
+    ("EARTH", "WIND"): "BLINDNESS",     # 흙 + 바람 → 모래폭풍(시야 차단)
+}
+
+
+def fusion_of(pose_a: str, pose_b: str) -> Optional[str]:
+    """서로 다른 두 포즈의 융합 주문명. 규칙이 없으면 None."""
+    return _FUSION_RULES.get(tuple(sorted((pose_a, pose_b))))  # type: ignore[arg-type]
+
+
+@dataclass(frozen=True)
+class DualCastResult:
+    """양손 판정 1건.
+
+    mode:
+        'amplify' — 양손이 같은 포즈. `spell` 은 그 기본 주문, 게임이 위력을 올린다.
+        'fusion'  — 양손이 다른 포즈. `spell` 은 이미 상위 주문(콤보)이다.
+    """
+
+    spell: str
+    mode: str
+    poses: Tuple[str, str]
+
+
+class DualHandAnalyzer:
+    """두 손의 포즈를 동시에 보고 증폭/융합 시전을 판정한다.
+
+    한 손만 잡히면 아무것도 반환하지 않는다 — 그 경우는 기존 단일
+    GestureAnalyzer 가 그대로 처리하므로 역할이 겹치지 않는다.
+    """
+
+    def __init__(self, config: GestureConfig | None = None) -> None:
+        self._cfg = config or GestureConfig()
+        self._current: Optional[Tuple[str, str]] = None   # 정렬된 포즈 쌍
+        self._hold = 0
+        self._cooldown = 0
+
+    def update(self, hands_landmarks: Optional[List[Any]]) -> Optional[DualCastResult]:
+        """프레임마다 손 랜드마크 리스트(0~2개)를 넣는다.
+
+        Returns:
+            조건이 충족된 프레임에 한 번만 DualCastResult, 그 외에는 None.
+        """
+        if self._cooldown > 0:
+            self._cooldown -= 1
+            if not hands_landmarks or len(hands_landmarks) < 2:
+                self._reset()
+            return None
+
+        pair = self._detect_pair(hands_landmarks)
+        if pair is None:
+            # 한쪽 손이 잠깐 가려진 정도로 진행도를 날리지 않는다(단일 포즈와 동일한 감쇠).
+            if self._current is not None:
+                self._hold -= self._cfg.pose_miss_decay
+                if self._hold <= 0:
+                    self._reset()
+            return None
+
+        if pair == self._current:
+            self._hold += 1
+        else:
+            self._current = pair
+            self._hold = 1
+
+        if self._hold < self._cfg.dual_hold_frames:
+            return None
+
+        result = self._resolve(pair)
+        self._cooldown = self._cfg.dual_cooldown_frames
+        self._hold = 0
+        self._current = None
+        return result
+
+    @property
+    def progress(self) -> float:
+        """듀얼 홀드 진행률(0.0~1.0) — HUD 게이지용."""
+        if self._current is None:
+            return 0.0
+        return min(1.0, self._hold / max(1, self._cfg.dual_hold_frames))
+
+    @property
+    def pending(self) -> Optional[Tuple[str, str]]:
+        """현재 모이고 있는 포즈 쌍(없으면 None)."""
+        return self._current
+
+    def reset(self) -> None:
+        """손 추적이 끊겼을 때 외부에서 강제 초기화."""
+        self._reset()
+        self._cooldown = 0
+
+    # ── 내부 ────────────────────────────────────────────────────────────
+    def _reset(self) -> None:
+        self._current = None
+        self._hold = 0
+
+    def _detect_pair(self, hands_landmarks: Optional[List[Any]]) -> Optional[Tuple[str, str]]:
+        """두 손 모두에서 포즈가 읽히면 정렬된 쌍으로 돌려준다."""
+        if not hands_landmarks or len(hands_landmarks) < 2:
+            return None
+        poses = []
+        for lm in hands_landmarks[:2]:
+            p = (_detect_pose(lm, self._cfg.ext_margin, self._cfg.thumb_margin)
+                 if lm is not None else None)
+            if p is None:
+                return None
+            poses.append(p)
+        return (poses[0], poses[1]) if poses[0] <= poses[1] else (poses[1], poses[0])
+
+    def _resolve(self, pair: Tuple[str, str]) -> DualCastResult:
+        a, b = pair
+        if a == b:
+            return DualCastResult(spell=a, mode="amplify", poses=pair)
+        fused = fusion_of(a, b)
+        if fused is not None:
+            return DualCastResult(spell=fused, mode="fusion", poses=pair)
+        # 융합 규칙이 없는 조합(예: 한쪽이 EARTH 엄지척으로 오인식) —
+        # 입력을 버리지 않고 사전순 앞선 원소의 증폭으로 처리한다.
+        return DualCastResult(spell=a, mode="amplify", poses=pair)
