@@ -33,6 +33,11 @@ _KOR_FONT_PATHS = (
 _KOR_FONT_NAMES = ("malgungothic", "malgun gothic", "gulim", "dotum", "batang")
 
 
+def reset_font_cache() -> None:
+    """pygame.quit() 뒤에는 캐시된 Font 가 무효가 된다(재초기화 시 'Text has zero width')."""
+    _KOR_FONT_CACHE.clear()
+
+
 def korean_font(size: int) -> pygame.font.Font:
     """한글을 렌더할 수 있는 폰트(크기별 캐시). 전부 실패하면 기본 폰트로 떨어진다."""
     cached = _KOR_FONT_CACHE.get(size)

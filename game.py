@@ -258,7 +258,7 @@ class SpellGame:
         pygame.display.init()
         pygame.font.init()
         self.screen = pygame.display.set_mode((SCREEN_W, SCREEN_H))
-        pygame.display.set_caption("Air Spell Arena – Demo")
+        pygame.display.set_caption("Air Spell Arena")
         self.clock = pygame.time.Clock()
         self.font = pygame.font.SysFont(None, 24)
         self.font_big = pygame.font.SysFont(None, 36)
@@ -544,6 +544,12 @@ class SpellGame:
                                                   if on else "OFF"), GREEN if on else GREY)
                     if self._camera_active:
                         self.request_camera(True)     # 새 프리셋으로 파이프라인 재구성
+                if event.type == pygame.KEYDOWN and event.key == pygame.K_f:
+                    on = not self._save.get("face_in_media", False)
+                    self._save["face_in_media"] = on
+                    save_data.save(self._save)
+                    self._toast("FACE IN SAVED CARDS/CLIPS: ON — 웹캠 얼굴이 PNG/MP4에 저장됩니다" if on
+                                else "FACE IN SAVED CARDS/CLIPS: OFF — 얼굴 영역은 가려서 저장", RED if on else GREEN)
                 if event.type == pygame.KEYDOWN and event.key == pygame.K_k:
                     self.start_calibration()
                 if event.type == pygame.KEYDOWN and event.key == pygame.K_d:
@@ -812,9 +818,7 @@ class SpellGame:
             return True
         if self._state == "rune_select":
             self.clock.tick(FPS)
-            nxt = ""
-            if self._stage_index < len(STAGE_LADDER):
-                nxt = BOSSES[STAGE_LADDER[self._stage_index]]["name"]
+            nxt = self._next_boss_name()
             self._rune_clickables = hud_ext.render_rune_select(
                 self.screen, self.font, self.font_big,
                 self._rune_offers, self._tick_rune,
@@ -832,11 +836,7 @@ class SpellGame:
             return True
         if self._state in ("game_over", "you_win"):
             self.clock.tick(FPS)
-            next_boss_name = (
-                BOSSES[STAGE_LADDER[self._stage_index]]["name"]
-                if self._can_continue_chain and self._stage_index < len(STAGE_LADDER)
-                else ""
-            )
+            next_boss_name = self._next_boss_name() if self._can_continue_chain else ""
             self._ending_clickables = self._fp.render_ending(
                 self._state, self._tick_ending,
                 stats=self._last_run_stats,
@@ -884,6 +884,11 @@ class SpellGame:
 
         # 승패 판정
         if self.boss_hp <= 0 and self._state == "playing":
+            # 처치 장면: 상태가 바뀌면 이 프레임은 캡처되지 않으므로, 클립을 굽기 전에
+            # 마지막 전투 화면을 한 번 그려 링버퍼에 넣는다(애니메이션은 진행시키지 않는다).
+            if self._recorder.enabled:
+                self._render(0)
+                self._recorder.capture(self.screen, force=True, mask=self._clip_mask())
             self._state = "you_win"
             self._tick_ending = 0
             self._finish_run(won=True)
@@ -916,7 +921,7 @@ class SpellGame:
 
         # 하이라이트 링버퍼 — 완성된 프레임을 담는다(연출·HUD·수정구까지 포함).
         if self._state == "playing":
-            self._recorder.capture(self.screen, dt)
+            self._recorder.capture(self.screen, dt, mask=self._clip_mask())
         return True
 
     def apply_spell(self, spell_name: str, mode: str = "single") -> SpellResult:
@@ -1090,6 +1095,7 @@ class SpellGame:
         """게임을 종료하고 Pygame을 정리합니다."""
         self._recorder.close()
         self._audio.close()
+        hud_ext.reset_font_cache()
         pygame.quit()
 
     # ── 내부 로직 ───────────────────────────────────────────────────────────
@@ -1255,6 +1261,9 @@ class SpellGame:
         if not self._save.get("first_run_done", False):
             self._save["first_run_done"] = True
             save_data.save(self._save)
+            # 최초 1회 고지 — 결과 카드·승리 클립이 자동 저장된다는 사실과 얼굴 기본값.
+            self._toast("승리 클립·결과 카드는 자동 저장됩니다. 웹캠 얼굴은 기본으로 가려집니다 (F 키로 변경)",
+                        CYAN, keep_if_longer=True)
 
     def _reset_entities(self) -> None:
         """전투 상태만 초기화한다(난이도/보스 선택/메뉴 전환은 호출부 책임)."""
@@ -1395,7 +1404,9 @@ class SpellGame:
 
         self._can_continue_chain = won and self._stage_index < self._max_stage_for_difficulty()
 
-        if won and self._stage_index + 1 > self._save.get("unlocked_stage", 1):
+        # 일일 챌린지는 보스 순서가 섞여 있어 일반 사다리 해금과 무관하다.
+        if (won and not self._daily.active
+                and self._stage_index + 1 > self._save.get("unlocked_stage", 1)):
             self._save["unlocked_stage"] = self._stage_index + 1
             if self._stage_index < len(STAGE_LADDER):
                 next_boss = BOSSES[STAGE_LADDER[self._stage_index]]["name"]
@@ -1432,6 +1443,18 @@ class SpellGame:
         self._write_share_card(won, stage_score, is_record)
         self._write_highlight_clip(won)
 
+    def _clip_mask(self) -> Optional[Tuple[int, int, int]]:
+        """클립에서 가릴 수정구 영역. 얼굴 포함을 허용했거나 수정구가 꺼져 있으면 없음."""
+        if self._save.get("face_in_media", False) or not self._orb.enabled:
+            return None
+        return (self._orb_center[0], self._orb_center[1], self._orb.radius)
+
+    def _next_boss_name(self) -> str:
+        """현재 사다리(일일 챌린지면 섞인 순서)에서 다음 스테이지 보스 이름."""
+        if self._stage_index < len(self._stage_ladder):
+            return BOSSES[self._stage_ladder[self._stage_index]]["name"]
+        return ""
+
     def _write_highlight_clip(self, won: bool) -> None:
         """결정적 순간의 직전 15초를 영상으로 남긴다.
 
@@ -1441,7 +1464,7 @@ class SpellGame:
         if not won or not self._recorder.enabled:
             return
         stamp = _dt.datetime.now().strftime("%Y%m%d_%H%M%S")
-        path = os.path.join(share_card.OUTPUT_DIR, f"airspell_{stamp}.mp4")
+        path = os.path.join(share_card.clips_dir(), f"airspell_{stamp}.mp4")
         self._last_clip_path = self._recorder.save(path) or ""
         self._recorder.clear()      # 다음 스테이지는 새 15초부터 모은다
 
@@ -1463,7 +1486,7 @@ class SpellGame:
             difficulty=self.difficulty,
             rune_summary=self._runes.summary(),
             rune_colors=self._rune_colors(),
-            portrait=self._orb.portrait(),
+            portrait=self._orb.portrait() if self._save.get("face_in_media", False) else None,
             is_record=is_record,
             daily_label=self._daily.label,
         )
@@ -1623,6 +1646,7 @@ class SpellGame:
             orb_center=self._menu_orb_center,
             camera_active=self._camera_active,
             seated_mode=bool(self._save.get("seated_mode", False)),
+            face_in_media=bool(self._save.get("face_in_media", False)),
             daily_best=daily_mod.best_for(self._save, daily_mod.today_key()),
             daily_streak=daily_mod.streak(self._save),
             difficulty=self.difficulty,

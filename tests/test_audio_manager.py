@@ -1,6 +1,6 @@
 """AudioManager — 설정 로드 / 폴백 / 볼륨 클램프.
 
-실제 오디오 장치 없이(SDL_AUDIODRIVER=dummy) 동작하며, cwd 를 tmp 로 옮겨
+실제 오디오 장치 없이(SDL_AUDIODRIVER=dummy) 동작하며, 경로를 tmp 로 돌려
 sounds/ · audio_config.json 을 격리한다.
 """
 from __future__ import annotations
@@ -15,7 +15,9 @@ from audio_manager import AudioManager, ALL_SLOTS
 
 @pytest.fixture()
 def workdir(tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
+    # 경로는 CWD 가 아니라 app_paths 가 정한다 — 둘 다 tmp 로 돌린다.
+    monkeypatch.setenv("AIR_SPELL_ARENA_HOME", str(tmp_path))
+    monkeypatch.setattr(audio_manager.app_paths, "resource_dir", lambda: tmp_path)
     (tmp_path / "sounds").mkdir()
     (tmp_path / "sounds" / "custom").mkdir()
     return tmp_path
@@ -62,3 +64,13 @@ def test_close_is_idempotent(workdir):
     am = AudioManager()
     am.close()
     am.close()
+
+
+def test_paths_do_not_depend_on_cwd(workdir, tmp_path_factory, monkeypatch):
+    (workdir / "sounds" / "bgm.ogg").write_bytes(b"x")
+    _write_cfg(workdir, {"bgm": "bgm.ogg"})
+    monkeypatch.chdir(tmp_path_factory.mktemp("elsewhere"))
+    am = AudioManager()
+    assert am.get_selected("bgm") == "bgm.ogg"
+    am.save_config()
+    assert (workdir / "audio_config.json").exists()

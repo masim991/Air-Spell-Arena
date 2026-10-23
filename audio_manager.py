@@ -12,13 +12,14 @@ audio_manager.py – BGM / SFX 2-슬롯 오디오 관리자.
 """
 
 import json
-from pathlib import Path
 from typing import Dict, List, Optional
 
 import pygame
 
+import app_paths
+
 _SOUNDS_DIR = "sounds"
-_CUSTOM_DIR = "sounds/custom"
+_CUSTOM_DIR = "sounds/custom"   # 사용자 폴더(data_dir) 기준
 _CONFIG_FILE = "audio_config.json"
 _EXTS = {".wav", ".mp3", ".ogg"}
 CLICK_SFX = "클릭사운드.mp3"  # UI 클릭음 (설정 목록에서 제외)
@@ -43,10 +44,16 @@ class AudioManager:
             except Exception as e:
                 print(f"[AudioManager] mixer 초기화 실패: {e}")
 
-        self._dir = Path(_SOUNDS_DIR)
-        self._dir.mkdir(parents=True, exist_ok=True)
-        self._custom_dir = Path(_CUSTOM_DIR)
-        self._custom_dir.mkdir(parents=True, exist_ok=True)
+        # 기본 사운드는 번들(읽기 전용) 위치, 커스텀 사운드·설정은 쓰기 가능한 사용자 위치.
+        # 소스 체크아웃에서는 둘 다 저장소 폴더다. CWD 에는 의존하지 않는다.
+        self._dir = app_paths.resource_path(_SOUNDS_DIR)
+        self._custom_dir = app_paths.data_path(_CUSTOM_DIR)
+        self._config_path = app_paths.data_path(_CONFIG_FILE)
+        for d in (self._dir, self._custom_dir):
+            try:
+                d.mkdir(parents=True, exist_ok=True)
+            except OSError as e:
+                print(f"[AudioManager] 폴더 생성 실패 ({d}): {e}")
 
         self._files: List[str] = []
         self._custom_files: List[str] = []
@@ -132,10 +139,13 @@ class AudioManager:
                 snd.set_volume(self._volumes.get(spell, _DEFAULT_VOLUME) / 100)
 
     def _load_config(self) -> dict:
-        try:
-            return json.loads(Path(_CONFIG_FILE).read_text(encoding="utf-8"))
-        except Exception:
-            return {}
+        # 사용자 설정이 없으면(설치판 첫 실행) 번들된 기본 설정을 읽는다.
+        for path in (self._config_path, app_paths.resource_path(_CONFIG_FILE)):
+            try:
+                return json.loads(path.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+        return {}
 
     def save_config(self) -> None:
         existing = self._load_config()
@@ -146,10 +156,14 @@ class AudioManager:
                 existing[slot] = self._config[slot]
         existing["use_custom"] = self._use_custom
         existing["volumes"]    = self._volumes
-        Path(_CONFIG_FILE).write_text(
-            json.dumps(existing, indent=2, ensure_ascii=False),
-            encoding="utf-8",
-        )
+        try:
+            self._config_path.parent.mkdir(parents=True, exist_ok=True)
+            self._config_path.write_text(
+                json.dumps(existing, indent=2, ensure_ascii=False),
+                encoding="utf-8",
+            )
+        except OSError as e:
+            print(f"[AudioManager] 설정 저장 실패: {e}")
 
     def _mk_sound(self, filename: Optional[str]) -> Optional[pygame.mixer.Sound]:
         if not filename:

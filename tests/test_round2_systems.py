@@ -308,3 +308,120 @@ def test_seated_pose_detection_accepts_tilted_hand():
     base, seated = GestureConfig(), seated_config()
     assert _detect_pose(lm, base.ext_margin, base.thumb_margin) != "FIRE"
     assert _detect_pose(lm, seated.ext_margin, seated.thumb_margin) == "FIRE"
+
+
+# ── 회귀: 배포 직전 점검에서 확인된 결함 ─────────────────────────────────────
+
+@pytest.mark.real_save
+def test_save_data_roundtrips_daily_records(tmp_path, monkeypatch):
+    """일일 기록이 재실행(load) 후에도 남는다 — 'daily' 키가 기본값에 없어 버려졌던 결함."""
+    import save_data
+    monkeypatch.setenv("AIR_SPELL_ARENA_HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path.parent)   # CWD 와 무관함도 함께 확인
+    data = save_data.load()
+    assert data["daily"] == {}
+    daily_mod.record(data, "2026-09-23", 123)
+    save_data.save(data)
+    again = save_data.load()
+    assert daily_mod.best_for(again, "2026-09-23") == 123
+    assert (tmp_path / "save_data.json").exists()
+
+
+@pytest.mark.real_save
+def test_save_data_drops_corrupt_daily_entries(tmp_path, monkeypatch):
+    import save_data
+    monkeypatch.setenv("AIR_SPELL_ARENA_HOME", str(tmp_path))
+    (tmp_path / "save_data.json").write_text(
+        '{"daily": {"2026-09-23": 5, "bad": "x"}}', encoding="utf-8")
+    assert save_data.load()["daily"] == {"2026-09-23": 5}
+
+
+def test_pyproject_lists_every_top_level_module():
+    import tomllib
+    from pathlib import Path
+    root = Path(__file__).resolve().parent.parent
+    listed = set(tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
+                 ["tool"]["setuptools"]["py-modules"])
+    on_disk = {p.stem for p in root.glob("*.py")}
+    assert on_disk <= listed, sorted(on_disk - listed)
+
+
+def test_next_boss_follows_daily_ladder():
+    """일일 챌린지의 '다음 보스' 안내는 섞인 일일 사다리를 따라야 한다."""
+    from game import SpellGame, BOSSES
+    g = SpellGame()
+    try:
+        g.start_daily_challenge()
+        g._stage_ladder = ["void", "arcane", "frost"]      # 일반 사다리와 다른 순서
+        g._stage_index = 1
+        assert g._next_boss_name() == BOSSES["arcane"]["name"]
+        g._stage_index = 3
+        assert g._next_boss_name() == ""
+    finally:
+        g.close()
+
+
+def test_final_kill_frame_reaches_the_clip(monkeypatch):
+    """보스가 쓰러지는 프레임이 클립 링버퍼에 들어간 뒤에 저장된다."""
+    from game import SpellGame
+    g = SpellGame()
+    try:
+        g._state = "playing"
+        forced = []
+        monkeypatch.setattr(g._recorder, "capture",
+                            lambda surf, dt=16, force=False, mask=None: forced.append(force) or True)
+        g.boss_hp = 0
+        g.run_one_frame(None)
+        assert g._state == "you_win"
+        assert True in forced
+    finally:
+        g.close()
+
+
+# ── 회귀: 얼굴 저장 기본값(프라이버시) ───────────────────────────────────────
+
+def test_face_hidden_by_default_and_mask_follows_setting():
+    from game import SpellGame
+    g = SpellGame()
+    try:
+        assert g._save["face_in_media"] is False
+        assert g._clip_mask() == (g._orb_center[0], g._orb_center[1], g._orb.radius)
+        g._save["face_in_media"] = True
+        assert g._clip_mask() is None
+        g._save["face_in_media"] = False
+        g._orb.set_enabled(False)          # 수정구가 꺼져 있으면 가릴 것이 없다
+        assert g._clip_mask() is None
+    finally:
+        g.close()
+
+
+def test_recorder_mask_covers_face_region(screen):
+    import numpy as np
+    from highlight import HighlightRecorder
+    screen.fill((250, 10, 10))                     # 얼굴 대용: 눈에 띄는 색
+    rec = HighlightRecorder(fps=20, width=320)
+    try:
+        w, h = screen.get_size()
+        raw = rec._grab(screen, (w // 2, h // 2, min(w, h) // 4))
+        arr = np.frombuffer(raw[0], dtype=np.uint8).reshape(raw[2], raw[1], 3)
+        assert tuple(arr[raw[2] // 2, raw[1] // 2]) == (16, 12, 30)   # 중앙은 덮임
+        assert tuple(arr[2, 2]) == (250, 10, 10)                       # 바깥은 그대로
+    finally:
+        rec.close()
+
+
+def test_share_card_gets_no_portrait_unless_face_enabled(monkeypatch):
+    import share_card
+    from game import SpellGame
+    seen = []
+    real = share_card.build_card          # 실제 카드 렌더까지 통과해야 한다(한글 폰트 포함)
+    monkeypatch.setattr(share_card, "build_card",
+                        lambda **kw: seen.append(kw["portrait"]) or real(**kw))
+    monkeypatch.setattr(share_card, "save_card", lambda card, out_dir=None: "x.png")
+    g = SpellGame()
+    try:
+        g._state = "playing"
+        g._finish_run(True)
+        assert seen[-1] is None
+    finally:
+        g.close()

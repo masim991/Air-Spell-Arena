@@ -300,6 +300,7 @@ class FPRenderer:
         orb_center:    Optional[Tuple[int, int]] = None,
         camera_active: bool = False,
         seated_mode:   bool = False,
+        face_in_media: bool = False,
         daily_best:    int = 0,
         daily_streak:  int = 0,
         best_score:    int = 0,
@@ -397,6 +398,9 @@ class FPRenderer:
         status_bits = []
         if seated_mode:
             status_bits.append(("SEATED MODE", GREEN))
+        # 저장물에 얼굴이 담기는지는 항상 보여준다 — 켜졌을 때만 경고색.
+        status_bits.append(("FACE IN SAVES: ON", RED) if face_in_media
+                           else ("FACE HIDDEN IN SAVES", TEXT_SECONDARY))
         if daily_best > 0:
             status_bits.append((f"TODAY BEST {daily_best}", GOLD))
         if status_bits:
@@ -427,6 +431,7 @@ class FPRenderer:
                 ("3", "Hard", ORANGE), ("4", "Impos", RED),
                 ("D", "Daily", GOLD), ("K", "Calib", CYAN),
                 ("S", "Seated", GREEN if seated_mode else TEXT_SECONDARY),
+                ("F", "Face", RED if face_in_media else TEXT_SECONDARY),
                 ("C", "Camera", TEXT_SECONDARY), ("G", "Guide", TEXT_SECONDARY)]
         _kslot = 104
         total_w = len(keys) * _kslot

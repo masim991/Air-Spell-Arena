@@ -20,6 +20,7 @@ from typing import Dict, Optional, Sequence, Tuple
 
 import pygame
 
+import app_paths
 import hud_ext
 
 log = logging.getLogger("air_spell_arena.share")
@@ -168,9 +169,15 @@ def build_card(
     return card
 
 
-def save_card(card: pygame.Surface, out_dir: str = OUTPUT_DIR) -> Optional[str]:
+def clips_dir() -> str:
+    """결과 카드·클립 저장 폴더(CWD 와 무관)."""
+    return str(app_paths.data_path(OUTPUT_DIR))
+
+
+def save_card(card: pygame.Surface, out_dir: Optional[str] = None) -> Optional[str]:
     """카드를 PNG 로 저장하고 경로를 돌려준다. 실패해도 게임은 멈추지 않는다."""
     try:
+        out_dir = out_dir or clips_dir()
         os.makedirs(out_dir, exist_ok=True)
         stamp = _dt.datetime.now().strftime("%Y%m%d_%H%M%S")
         path = os.path.join(out_dir, f"airspell_{stamp}.png")

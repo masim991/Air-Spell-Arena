@@ -18,9 +18,11 @@ os.environ.setdefault("GLOG_minloglevel", "2")
 
 
 @pytest.fixture(autouse=True)
-def _isolated_save_data(monkeypatch):
+def _isolated_save_data(request, monkeypatch):
     """테스트는 실제 플레이어의 save_data.json(점수/난이도/보스 해금)에
     의존하지도, 그것을 덮어쓰지도 않는다 — 항상 초기값으로 시작한다."""
+    if request.node.get_closest_marker("real_save"):
+        return          # 저장 계층 자체를 검증하는 테스트(경로는 AIR_SPELL_ARENA_HOME 로 격리)
     import save_data as _sd
     monkeypatch.setattr(_sd, "load", lambda: _sd._defaults())
     monkeypatch.setattr(_sd, "save", lambda data: None)

@@ -25,6 +25,8 @@ air-spell-arena = "main:run"
 py-modules = [
     "main", "game", "fp_renderer", "vision_loop", "head_tracker",
     "gesture", "trajectory", "spell_combo", "audio_manager", "air_canvas",
+    "app_paths", "daily", "highlight", "hud_ext", "mana", "runes",
+    "save_data", "share_card", "webcam_overlay",
 ]
 
 [tool.ruff]
@@ -39,3 +41,4 @@ select = ["E9", "F"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+markers = ["real_save: 실제 save_data.load/save 를 사용(경로는 tmp 로 격리)"]

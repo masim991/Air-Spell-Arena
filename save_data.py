@@ -12,9 +12,16 @@ import logging
 from pathlib import Path
 from typing import Any, Dict
 
+import app_paths
+
 log = logging.getLogger("air_spell_arena.save_data")
 
 _SAVE_FILE = "save_data.json"
+
+
+def _path() -> Path:
+    return app_paths.data_path(_SAVE_FILE)
+
 _DIFFICULTIES = ("easy", "normal", "hard", "impossible")
 
 
@@ -35,13 +42,28 @@ def _defaults() -> Dict[str, Any]:
         "save_clips": True,           # 승리 시 직전 15초 하이라이트 클립 자동 저장
         "calibration_done": False,    # 포즈 확인 온보딩을 한 번이라도 마쳤는지
         "seated_mode": False,         # 앉은 자세(팔꿈치 지지) 프리셋 — 인식 여유↑, 유지시간↓
+        "face_in_media": False,       # 공유 카드/클립에 웹캠 얼굴(수정구)을 담을지 — 기본은 가림(메뉴 F 키)
+        "daily": {},                  # 일일 챌린지 날짜별 최고 점수 {"YYYY-MM-DD": score}
     }
+
+
+def _clean_daily(raw: Any) -> Dict[str, int]:
+    """손상된 항목은 버리고 {날짜: 점수}만 남긴다."""
+    if not isinstance(raw, dict):
+        return {}
+    out: Dict[str, int] = {}
+    for k, v in raw.items():
+        try:
+            out[str(k)] = int(v)
+        except (TypeError, ValueError):
+            continue
+    return out
 
 
 def load() -> Dict[str, Any]:
     """저장 파일을 읽어 기본값과 병합한다. 없거나 손상돼도 기본값을 반환한다."""
     data = _defaults()
-    path = Path(_SAVE_FILE)
+    path = _path()
     if not path.exists():
         return data
     try:
@@ -54,6 +76,7 @@ def load() -> Dict[str, Any]:
                     d: int(loaded["best_score"].get(d, 0)) for d in _DIFFICULTIES
                     if d in loaded["best_score"]
                 })
+            data["daily"] = _clean_daily(loaded.get("daily"))
     except Exception as e:
         log.warning("save_data.json 로드 실패 — 기본값 사용: %s", e)
     return data
@@ -62,7 +85,9 @@ def load() -> Dict[str, Any]:
 def save(data: Dict[str, Any]) -> None:
     """저장 파일에 기록한다. 실패해도 게임 진행에는 영향 없음."""
     try:
-        with Path(_SAVE_FILE).open("w", encoding="utf-8") as f:
+        path = _path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
     except Exception as e:
         log.warning("save_data.json 저장 실패: %s", e)

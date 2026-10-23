@@ -113,36 +113,43 @@ class HighlightRecorder:
         self._accum_ms = 0.0
 
     # ── 캡처 ────────────────────────────────────────────────────────────
-    def capture(self, surface: pygame.Surface, dt_ms: int = 16) -> bool:
+    def capture(self, surface: pygame.Surface, dt_ms: int = 16, force: bool = False,
+                mask: Optional[Tuple[int, int, int]] = None) -> bool:
         """한 프레임을 링버퍼에 넣는다(목표 fps 에 맞춰 솎아낸다).
 
         Returns:
             실제로 한 장 담았으면 True.
+            force: 솎아내기를 건너뛰고 반드시 담는다(처치 장면처럼 놓치면 안 되는 프레임).
+            mask: (cx, cy, r) 화면 좌표의 원 영역을 가린 채 담는다(웹캠 얼굴이 클립에 남지 않게).
         """
         if not self._enabled:
             return False
 
-        self._accum_ms += dt_ms
-        if self._accum_ms < self._interval_ms:
-            return False
-        # 프레임이 밀려도 따라잡으려 몰아 담지 않는다 — 한 번에 한 장만.
-        self._accum_ms = min(self._accum_ms - self._interval_ms, self._interval_ms)
+        if not force:
+            self._accum_ms += dt_ms
+            if self._accum_ms < self._interval_ms:
+                return False
+            # 프레임이 밀려도 따라잡으려 몰아 담지 않는다 — 한 번에 한 장만.
+            self._accum_ms = min(self._accum_ms - self._interval_ms, self._interval_ms)
 
         try:
-            raw = self._grab(surface)
+            raw = self._grab(surface, mask)
         except Exception:                    # noqa: BLE001 — 녹화가 게임을 죽이지 않는다
             log.debug("하이라이트 프레임 캡처 실패(건너뜀)", exc_info=True)
             return False
         if raw is None:
             return False
         try:
-            self._raw_q.put_nowait(raw)
+            if force:
+                self._raw_q.put(raw, timeout=0.5)    # 결정적 프레임은 잠깐 기다려서라도 담는다
+            else:
+                self._raw_q.put_nowait(raw)
         except queue.Full:
             self.dropped += 1                # 워커가 밀렸다 — 기다리지 않고 버린다
             return False
         return True
 
-    def _grab(self, surface: pygame.Surface) -> Optional[Tuple[bytes, int, int]]:
+    def _grab(self, surface: pygame.Surface, mask: Optional[Tuple[int, int, int]] = None) -> Optional[Tuple[bytes, int, int]]:
         """Surface → 축소 → 원시 RGB 바이트. 게임 스레드가 하는 일은 여기까지다."""
         sw, sh = surface.get_size()
         if sw <= 0 or sh <= 0:
@@ -158,6 +165,12 @@ class HighlightRecorder:
         if self._scaled is None or self._scaled.get_size() != (tw, th):
             self._scaled = pygame.Surface((tw, th))
         pygame.transform.scale(surface, (tw, th), self._scaled)
+        if mask is not None:
+            # 원본 해상도에서 얼굴이 흐려져 남지 않도록 축소본 위에 불투명하게 덮는다.
+            k = tw / float(sw)
+            cx, cy, r = int(mask[0] * k), int(mask[1] * k), int(mask[2] * k) + 2
+            pygame.draw.circle(self._scaled, (16, 12, 30), (cx, cy), r)
+            pygame.draw.circle(self._scaled, (110, 110, 130), (cx, cy), max(1, int(r * 0.42)), 1)
         self._size = (tw, th)
         # tobytes 는 이미 (행 우선, RGB) 순서라 워커에서 reshape 만 하면 된다.
         return (pygame.image.tobytes(self._scaled, "RGB"), tw, th)
@@ -176,6 +189,7 @@ class HighlightRecorder:
             except queue.Empty:
                 continue
             if item is None:
+                self._raw_q.task_done()
                 break
             raw, w, h = item
             try:
@@ -186,6 +200,8 @@ class HighlightRecorder:
                     self._frames.append(buf.tobytes())   # deque.append 는 원자적이다
             except Exception:                # noqa: BLE001
                 log.debug("하이라이트 인코딩 실패(건너뜀)", exc_info=True)
+            finally:
+                self._raw_q.task_done()
 
     def close(self) -> None:
         """워커를 정리한다(게임 종료 시)."""
@@ -197,11 +213,12 @@ class HighlightRecorder:
         if self._worker.is_alive():
             self._worker.join(timeout=1.0)
 
-    def flush(self, timeout_s: float = 0.5) -> None:
+    def flush(self, timeout_s: float = 1.0) -> None:
         """저장 직전에 큐에 남은 프레임이 링버퍼에 들어갈 시간을 준다."""
         import time as _t
         deadline = _t.perf_counter() + timeout_s
-        while not self._raw_q.empty() and _t.perf_counter() < deadline:
+        # empty() 만 보면 워커가 마지막 프레임을 인코딩 중일 때 놓친다 — 처리 완료까지 본다.
+        while self._raw_q.unfinished_tasks and _t.perf_counter() < deadline:
             _t.sleep(0.01)
 
     # ── 저장 ────────────────────────────────────────────────────────────
