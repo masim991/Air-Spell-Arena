@@ -17,6 +17,7 @@ from typing import List, Optional, Sequence, Tuple
 
 import pygame
 
+import app_paths
 import hud_ext
 
 # ── Minimal Arcade Chrome Palette ──────────────────────────────────────────────
@@ -99,7 +100,13 @@ class FPRenderer:
     def wand_tip(self, player_offset_x: float = 0.0) -> Tuple[int, int]:
         """완드 끝 화면 좌표. player_offset_x(-1~1)만큼 좌우로 흔들린다."""
         shift = int(player_offset_x * self.W * self.WAND_SWAY_GAIN)
-        return int(self.W * self.WAND_FX) + shift, int(self.H * self.WAND_FY)
+        bob = int(math.sin(self._tick * 0.045) * 5)
+        if self._wand_art is not None:
+            # Center of the gem in the 512px Blender render, scaled to 310px.
+            return int(self.W * 0.56) + shift + 79, int(self.H * 0.68) + bob + 41
+        sway = int(math.sin(self._tick * 0.019) * 2)
+        return (int(self.W * self.WAND_FX) + shift + sway // 2,
+                int(self.H * self.WAND_FY) + bob)
 
     def __init__(
         self,
@@ -142,6 +149,31 @@ class FPRenderer:
         self._motes: List[dict] = []
         self._grade_cache: Optional[pygame.Surface] = None
         self._grain_tiles: List[pygame.Surface] = []
+        self._arena_art = self._load_art("arena_background.png", (self.W, self.H))
+        self._wand_art = self._load_art("player_wand.png", (310, 310))
+        self._menu_backdrop = pygame.Surface((self.W, self.H), pygame.SRCALPHA)
+        self._menu_backdrop.fill((0, 0, 0, 100))
+        self._boss_art = {
+            name: self._load_art(f"boss_{name}.png", (400, 400))
+            for name in ("arcane", "frost", "void")
+        }
+        self._art_boss_shadow = pygame.Surface((250, 38), pygame.SRCALPHA)
+        for inset, alpha in ((0, 15), (12, 25), (25, 40), (40, 55), (55, 70)):
+            pygame.draw.ellipse(self._art_boss_shadow, (5, 4, 10, alpha),
+                                (inset, inset // 14, 250 - inset * 2, 38 - inset // 7))
+
+    @staticmethod
+    def _load_art(name: str, size: Tuple[int, int]) -> Optional[pygame.Surface]:
+        """Load bundled Blender render once. Keep procedural art as a fallback."""
+        path = app_paths.resource_path("assets", name)
+        try:
+            if not path.is_file():
+                return None
+            image = pygame.image.load(str(path))
+            image = image.convert() if name == "arena_background.png" else image.convert_alpha()
+            return pygame.transform.smoothscale(image, size)
+        except (pygame.error, OSError):
+            return None
 
     # ── Particle System ────────────────────────────────────────────────────────
 
@@ -311,6 +343,7 @@ class FPRenderer:
         W, H = self.W, self.H
 
         self._draw_bg()
+        self.screen.blit(self._menu_backdrop, (0, 0))
 
         # ── Ambient floating ember particles (grayscale, static chrome) ────
         for k in range(8):
@@ -1415,6 +1448,9 @@ class FPRenderer:
 
     def _draw_bg(self, player_offset_x: float = 0.0) -> None:
         W, H = self.W, self.H
+        if self._arena_art is not None:
+            self.screen.blit(self._arena_art, (0, 0))
+            return
         horizon = H // 2
 
         # 그라디언트는 정적 → 최초 1회만 생성 후 blit으로 재사용 (60fps × 720줄 → 1 blit)
@@ -1586,6 +1622,36 @@ class FPRenderer:
         cx = W // 2 + boss_shift + float_x + atk_lean + recoil
         cy = H // 2 - 28 + float_y
         R  = int(72 * (1.08 if is_attacking else 1.0))
+
+        art_key = {
+            "ARCANE BOSS": "arcane",
+            "FROSTBOUND WRAITH": "frost",
+            "VOIDBOUND DEVOURER": "void",
+        }.get(boss_name, "arcane")
+        sprite = self._boss_art.get(art_key)
+        if sprite is not None:
+            # Rendered boss uses the same center, bob, recoil and HP state as the drawn fallback.
+            shadow_rect = self._art_boss_shadow.get_rect(center=(cx, H // 2 + 177))
+            self.screen.blit(self._art_boss_shadow, shadow_rect)
+            self.screen.blit(sprite, sprite.get_rect(center=(cx, cy + 14)))
+            if is_hit:
+                pygame.draw.circle(self.screen, (235, 226, 210), (cx, cy), 108, 3)
+            if is_attacking:
+                pygame.draw.circle(self.screen, accent or (230, 85, 60), (cx, cy), 168, 3)
+            if enraged:
+                pygame.draw.circle(self.screen, (230, 66, 44), (cx, cy), 184, 2)
+            bw, bh = 200, 14
+            bx, by = cx - bw // 2, cy - 196
+            pygame.draw.rect(self.screen, (22, 4, 4), (bx - 2, by - 2, bw + 4, bh + 4), border_radius=5)
+            pygame.draw.rect(self.screen, (38, 14, 14), (bx, by, bw, bh), border_radius=5)
+            if int(bw * hp_ratio) > 0:
+                color = accent or (220, 70, 55)
+                pygame.draw.rect(self.screen, color, (bx, by, int(bw * hp_ratio), bh), border_radius=5)
+            pygame.draw.rect(self.screen, GREY, (bx, by, bw, bh), 1, border_radius=5)
+            label = f"!! {boss_name} — ENRAGED !!" if enraged else boss_name
+            text = self.font.render(label, True, (255, 110, 0) if enraged else GREY)
+            self.screen.blit(text, text.get_rect(center=(cx, by - 14)))
+            return
 
         # ── 지면 그림자 ──────────────────────────────────────────────────────
         if self._boss_sh_r != R:
@@ -1925,6 +1991,11 @@ class FPRenderer:
 
     def _draw_wand(self, player_offset_x: float = 0.0) -> None:
         W, H = self.W, self.H
+        if self._wand_art is not None:
+            bob = int(math.sin(self._tick * 0.045) * 5)
+            sway = int(player_offset_x * W * self.WAND_SWAY_GAIN)
+            self.screen.blit(self._wand_art, (int(W * 0.56) + sway, int(H * 0.68) + bob))
+            return
         wand_shift = int(player_offset_x * W * self.WAND_SWAY_GAIN)
 
         # ── 호흡 + 미세 흔들림 애니메이션 ──────────────────────────────────

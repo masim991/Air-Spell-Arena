@@ -41,3 +41,7 @@ save_data.json
 
 # 런 종료 시 자동 생성되는 공유용 결과 카드(플레이어 얼굴이 담길 수 있다)
 clips/
+
+# 로컬 Blender 단계 백업
+*.blend1
+art/blender/backups/

@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import datetime as dt
 import os
+import queue
+import threading
 from types import SimpleNamespace
 
 import pygame
@@ -32,12 +34,65 @@ def screen():
 
 # ── 하이라이트 레코더 ───────────────────────────────────────────────────────
 
-def test_recorder_thins_to_target_fps(screen):
+def test_recorder_thins_to_target_fps(screen, monkeypatch):
     rec = HighlightRecorder(seconds=2, fps=10)
     try:
-        taken = sum(rec.capture(screen, 16) for _ in range(60))   # 약 1초 분량
-        assert 8 <= taken <= 12                                   # 10fps ± 여유
+        # 가상 시간 960ms를 실제 수 밀리초에 호출하므로 인코딩 속도와 분리한다.
+        captured = []
+        with monkeypatch.context() as patch:
+            patch.setattr(rec._raw_q, "put_nowait", captured.append)
+            taken = sum(rec.capture(screen, 16) for _ in range(60))
+        assert taken == 9
+        assert len(captured) == 9
     finally:
+        rec.close()
+
+
+def test_recorder_drops_frame_when_encoder_queue_is_full(screen, monkeypatch):
+    rec = HighlightRecorder(seconds=2, fps=10)
+    try:
+        def full(_item):
+            raise queue.Full
+
+        with monkeypatch.context() as patch:
+            patch.setattr(rec._raw_q, "put_nowait", full)
+            assert rec.capture(screen, 100) is False
+        assert rec.dropped == 1
+    finally:
+        rec.close()
+
+
+@pytest.mark.parametrize("disable", [False, True])
+def test_recorder_discards_pending_frames_after_clear_or_disable(screen, monkeypatch, disable):
+    import cv2
+
+    started = threading.Event()
+    release = threading.Event()
+    original = cv2.imencode
+
+    def paused_encode(*args, **kwargs):
+        started.set()
+        if not release.wait(5):
+            raise TimeoutError("encoder was not released")
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(cv2, "imencode", paused_encode)
+    rec = HighlightRecorder(seconds=2, fps=10)
+    try:
+        assert rec.capture(screen, 100)
+        assert started.wait(5)
+        assert rec.capture(screen, 100)  # 인코더가 처리 중일 때 큐에 남는 프레임
+        if disable:
+            rec.set_enabled(False)
+            rec.set_enabled(True)
+        else:
+            rec.clear()
+        assert rec.capture(screen, 100)  # 초기화 이후 프레임은 보존한다
+        release.set()
+        rec.flush(5)
+        assert len(rec) == 1
+    finally:
+        release.set()
         rec.close()
 
 
@@ -77,15 +132,18 @@ def test_recorder_writes_playable_video(screen, tmp_path):
     try:
         for i in range(60):
             screen.fill((i * 4 % 255, 90, 160))
-            rec.capture(screen, 100)
+            assert rec.capture(screen, 100)
+            if i % 3 == 2:
+                rec.flush(2.0)
         rec.flush(2.0)
+        assert len(rec) == 30
         out = rec.save(str(tmp_path / "clip.mp4"))
         assert out is not None and os.path.getsize(out) > 0
         cap = cv2.VideoCapture(out)
         try:
             ok, frame = cap.read()
             assert ok and frame is not None
-            assert cap.get(cv2.CAP_PROP_FRAME_COUNT) >= 10
+            assert cap.get(cv2.CAP_PROP_FRAME_COUNT) == 30
         finally:
             cap.release()
     finally:

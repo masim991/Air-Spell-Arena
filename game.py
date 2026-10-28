@@ -547,6 +547,9 @@ class SpellGame:
                 if event.type == pygame.KEYDOWN and event.key == pygame.K_f:
                     on = not self._save.get("face_in_media", False)
                     self._save["face_in_media"] = on
+                    if not on:
+                        # 이미 기록된 얼굴 포함 프레임이 이후 클립에 섞이지 않도록 한다.
+                        self._recorder.clear()
                     save_data.save(self._save)
                     self._toast("FACE IN SAVED CARDS/CLIPS: ON — 웹캠 얼굴이 PNG/MP4에 저장됩니다" if on
                                 else "FACE IN SAVED CARDS/CLIPS: OFF — 얼굴 영역은 가려서 저장", RED if on else GREEN)
@@ -961,7 +964,8 @@ class SpellGame:
 
         # ── 연출 강도 — 증폭/융합은 눈에 띄게 커야 "특별한 시전"으로 읽힌다 ──
         fx_scale = 2.0 if amplified else (1.5 if mode == "fusion" else 1.0)
-        wand_x, wand_y = self._fp.wand_tip()
+        player_offset_x = (self._player_fx - SCREEN_W / 2) / (SCREEN_W / 2)
+        wand_x, wand_y = self._fp.wand_tip(player_offset_x)
         pcount, pkind = spec["particles"]
         self._fp.add_particles(wand_x, wand_y, int(pcount * fx_scale), spec["color"], pkind)
         shake_i, shake_d = spec["shake"]
@@ -1363,6 +1367,7 @@ class SpellGame:
 
     def _start_new_run(self) -> None:
         """전투 진입(인트로→playing) 시 런 통계를 리셋하고 총 플레이 횟수를 기록한다."""
+        self._recorder.clear()  # 이전에 패배하거나 중단한 전투의 프레임을 섞지 않는다.
         self._run_start_ms = pygame.time.get_ticks()
         self._dmg_dealt = 0
         self._dmg_taken = 0
@@ -1486,7 +1491,8 @@ class SpellGame:
             difficulty=self.difficulty,
             rune_summary=self._runes.summary(),
             rune_colors=self._rune_colors(),
-            portrait=self._orb.portrait() if self._save.get("face_in_media", False) else None,
+            portrait=(self._orb.portrait()
+                      if self._save.get("face_in_media", False) and self._orb.enabled else None),
             is_record=is_record,
             daily_label=self._daily.label,
         )

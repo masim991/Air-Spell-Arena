@@ -23,6 +23,7 @@ else:
     print("[spec] audio rights NOT cleared: sounds/ is not bundled (silent build). "
           "Set AIRSPELL_AUDIO_CLEARED=1 only after verifying rights.")
 datas += [("audio_config.json", ".")]
+datas += [("assets", "assets")]
 datas += collect_data_files("mediapipe")
 hiddenimports = [
     "mediapipe.python.solutions.hands",
@@ -38,7 +39,8 @@ a = Analysis(
     hiddenimports=hiddenimports,
     hookspath=[],
     runtime_hooks=[],
-    excludes=["tkinter", "matplotlib", "pytest"],
+    # MediaPipe imports drawing_utils during startup, which requires matplotlib.
+    excludes=["tkinter", "pytest"],
     cipher=block_cipher,
 )
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)

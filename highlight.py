@@ -72,6 +72,8 @@ class HighlightRecorder:
         self.fps = max(1, fps)
         self.seconds = max(1, seconds)
         self.width = max(160, width)
+        self._state_lock = threading.RLock()
+        self._generation = 0
         self._enabled = enabled
         self._frames: Deque[bytes] = deque(maxlen=self.seconds * self.fps)
         self._size: Optional[tuple] = None      # (w, h) — 첫 캡처에서 확정
@@ -80,7 +82,7 @@ class HighlightRecorder:
         self._scaled: Optional[pygame.Surface] = None   # 축소 버퍼 재사용
 
         # 인코딩 워커 — 큐가 차면 프레임을 버린다(게임 루프는 절대 블록하지 않는다).
-        self._raw_q: "queue.Queue[Optional[Tuple[bytes, int, int]]]" = queue.Queue(maxsize=3)
+        self._raw_q: "queue.Queue[Optional[Tuple[int, bytes, int, int]]]" = queue.Queue(maxsize=3)
         self._stop = threading.Event()
         self._worker = threading.Thread(target=self._encode_loop,
                                         name="highlight-encoder", daemon=True)
@@ -90,27 +92,33 @@ class HighlightRecorder:
     # ── 상태 ────────────────────────────────────────────────────────────
     @property
     def enabled(self) -> bool:
-        return self._enabled
+        with self._state_lock:
+            return self._enabled
 
     def set_enabled(self, value: bool) -> None:
-        self._enabled = bool(value)
-        if not self._enabled:
-            self.clear()
+        with self._state_lock:
+            self._enabled = bool(value)
+            if not self._enabled:
+                self.clear()
 
     def toggle(self) -> bool:
-        self.set_enabled(not self._enabled)
-        return self._enabled
+        with self._state_lock:
+            self.set_enabled(not self._enabled)
+            return self._enabled
 
     def __len__(self) -> int:
-        return len(self._frames)
+        with self._state_lock:
+            return len(self._frames)
 
     @property
     def buffered_seconds(self) -> float:
-        return len(self._frames) / float(self.fps)
+        return len(self) / float(self.fps)
 
     def clear(self) -> None:
-        self._frames.clear()
-        self._accum_ms = 0.0
+        with self._state_lock:
+            self._generation += 1
+            self._frames.clear()
+            self._accum_ms = 0.0
 
     # ── 캡처 ────────────────────────────────────────────────────────────
     def capture(self, surface: pygame.Surface, dt_ms: int = 16, force: bool = False,
@@ -122,15 +130,16 @@ class HighlightRecorder:
             force: 솎아내기를 건너뛰고 반드시 담는다(처치 장면처럼 놓치면 안 되는 프레임).
             mask: (cx, cy, r) 화면 좌표의 원 영역을 가린 채 담는다(웹캠 얼굴이 클립에 남지 않게).
         """
-        if not self._enabled:
-            return False
-
-        if not force:
-            self._accum_ms += dt_ms
-            if self._accum_ms < self._interval_ms:
+        with self._state_lock:
+            if not self._enabled:
                 return False
-            # 프레임이 밀려도 따라잡으려 몰아 담지 않는다 — 한 번에 한 장만.
-            self._accum_ms = min(self._accum_ms - self._interval_ms, self._interval_ms)
+            generation = self._generation
+            if not force:
+                self._accum_ms += dt_ms
+                if self._accum_ms < self._interval_ms:
+                    return False
+                # 프레임이 밀려도 따라잡으려 몰아 담지 않는다 — 한 번에 한 장만.
+                self._accum_ms = min(self._accum_ms - self._interval_ms, self._interval_ms)
 
         try:
             raw = self._grab(surface, mask)
@@ -139,11 +148,12 @@ class HighlightRecorder:
             return False
         if raw is None:
             return False
+        item = (generation, *raw)
         try:
             if force:
-                self._raw_q.put(raw, timeout=0.5)    # 결정적 프레임은 잠깐 기다려서라도 담는다
+                self._raw_q.put(item, timeout=0.5)   # 결정적 프레임은 잠깐 기다려서라도 담는다
             else:
-                self._raw_q.put_nowait(raw)
+                self._raw_q.put_nowait(item)
         except queue.Full:
             self.dropped += 1                # 워커가 밀렸다 — 기다리지 않고 버린다
             return False
@@ -191,13 +201,18 @@ class HighlightRecorder:
             if item is None:
                 self._raw_q.task_done()
                 break
-            raw, w, h = item
+            generation, raw, w, h = item
             try:
+                with self._state_lock:
+                    if generation != self._generation or not self._enabled:
+                        continue
                 arr = np.frombuffer(raw, dtype=np.uint8).reshape(h, w, 3)
                 ok, buf = cv2.imencode(".jpg", arr,
                                        [int(cv2.IMWRITE_JPEG_QUALITY), JPEG_QUALITY])
                 if ok:
-                    self._frames.append(buf.tobytes())   # deque.append 는 원자적이다
+                    with self._state_lock:
+                        if generation == self._generation and self._enabled:
+                            self._frames.append(buf.tobytes())
             except Exception:                # noqa: BLE001
                 log.debug("하이라이트 인코딩 실패(건너뜀)", exc_info=True)
             finally:
@@ -231,13 +246,11 @@ class HighlightRecorder:
         """
         import cv2
 
-        if not self._enabled or self._size is None:
-            return None
         self.flush()                         # 워커가 아직 물고 있는 프레임까지 담는다
-        if len(self._frames) < min_frames:
-            return None
-
-        frames = list(self._frames)
+        with self._state_lock:
+            if not self._enabled or self._size is None or len(self._frames) < min_frames:
+                return None
+            frames = list(self._frames)
         w, h = self._size
         try:
             os.makedirs(os.path.dirname(path) or ".", exist_ok=True)

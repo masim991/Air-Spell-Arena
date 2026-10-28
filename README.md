@@ -199,6 +199,20 @@ $env:AIRSPELL_AUDIO_CLEARED='1'; pyinstaller airspellarena.spec
   배포하려면 직접 제작했거나 상업/재배포가 허용된 음원으로 교체하고 출처를 이 문서에 기록해야 합니다.
 - 저장소에는 `sounds/custom/` 파일이 아직 추적되고 있습니다. 공개 저장소로 올리기 전에 제거를 검토하세요.
 
+## Blender 아트
+
+Blender 5.2.3으로 제작한 편집 원본은 `art/blender/air_spell_arena_art.blend`입니다.
+`art/blender/build_assets.py`를 Blender 백그라운드 모드에서 실행하면 `assets/`의 PNG 6장을 다시 렌더합니다.
+
+```powershell
+blender -b --factory-startup --python-exit-code 1 -P art/blender/build_assets.py
+```
+
+게임은 석조 경기장 배경, 1인칭 플레이어 지팡이, ARCANE/FROST/VOID 보스 이미지를 사용합니다.
+플레이어 전신 모델은 Blender 원본과 `assets/player_mage.png`에 들어 있으며 현재 전투 화면에서는 지팡이만 보입니다.
+아트 파일이 없으면 기존 Pygame 도형 렌더링으로 전환합니다. PyInstaller 빌드에는 `assets/`가 포함됩니다.
+현재 모델은 렌더용 로우폴리이며 리깅·캐릭터 애니메이션은 포함하지 않습니다.
+
 ## 모듈 구조
 | 파일 | 역할 |
 |------|------|
