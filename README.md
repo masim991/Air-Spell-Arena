@@ -211,7 +211,23 @@ blender -b --factory-startup --python-exit-code 1 -P art/blender/build_assets.py
 게임은 석조 경기장 배경, 1인칭 플레이어 지팡이, ARCANE/FROST/VOID 보스 이미지를 사용합니다.
 플레이어 전신 모델은 Blender 원본과 `assets/player_mage.png`에 들어 있으며 현재 전투 화면에서는 지팡이만 보입니다.
 아트 파일이 없으면 기존 Pygame 도형 렌더링으로 전환합니다. PyInstaller 빌드에는 `assets/`가 포함됩니다.
-현재 모델은 렌더용 로우폴리이며 리깅·캐릭터 애니메이션은 포함하지 않습니다.
+보스는 대기·공격 예고/발사·회피 시의 방어 자세를 각각 12프레임으로 표시합니다.
+방어 자세는 기존 회피 판정에 연결된 연출이며 별도의 방패나 피해 감소 능력을 추가하지 않습니다.
+보스 투사체는 애니메이션에 맞춘 손 위치에서 출발하며, 원소마다 다른 효과를 사용합니다.
+1인칭 장갑과 지팡이는 주문 종류마다 다르게 움직이고 방패가 켜지면 방어 자세를 취합니다.
+배경은 파손된 원형 경기장과 움직이는 바닥 문양으로 구성됩니다.
+
+보스 동작 원본은 `art/blender/air_spell_arena_motion.blend`입니다. 빈 오브젝트로
+팔·날개를 움직인 키프레임을 사용하며 스켈레톤 리그는 없습니다. 재생성은 다음과 같습니다.
+
+```powershell
+blender -b --factory-startup art/blender/air_spell_arena_art.blend --python-exit-code 1 -P art/blender/build_boss_motion.py
+python art/blender/pack_boss_motion.py
+blender -b --factory-startup art/blender/air_spell_arena_art.blend --python-exit-code 1 -P art/blender/build_dungeon_hand.py
+```
+
+프레임 이미지는 `build/boss_motion/`에 저장되고, 두 번째 명령이 게임용 아틀라스를 만듭니다.
+경기장과 손의 편집 원본은 `art/blender/apocalypse_dungeon_hand.blend`입니다.
 
 ## 모듈 구조
 | 파일 | 역할 |

@@ -1587,6 +1587,10 @@ class SpellGame:
 
     # ── 렌더링 ──────────────────────────────────────────────────────────────
 
+    def _boss_visual_offset(self) -> float:
+        return max(-SCREEN_W * .18, min(SCREEN_W * .18,
+                   (self.boss_pos[0] - (SCREEN_W - 150)) * .6))
+
     def _render(self, dt_ms: int = 16) -> None:
         player_offset_x = (self._player_fx - SCREEN_W / 2) / (SCREEN_W / 2)
         self._fp.render_frame(
@@ -1605,6 +1609,7 @@ class SpellGame:
             gesture_drawing=self._gesture_drawing,
             boss_name=self._boss_name,
             boss_accent=self._boss_accent,
+            boss_offset_x=self._boss_visual_offset(),
             score=self.live_score(),
             stage_index=self._stage_index,
             stage_count=len(self._stage_ladder),
@@ -1688,6 +1693,7 @@ class SpellGame:
             "dodge_checked": False,
             "dodged": False,
             "cast_offset_x": cast_offset_x,
+            "target_visual_offset": self._boss_visual_offset(),
         })
 
     def _spawn_boss_projectile(self, dmg: int,
@@ -1697,7 +1703,7 @@ class SpellGame:
         self._effects.append({
             "type": "proj",
             "element": "BOSS",
-            "style": "boss",
+            "style": self.boss_element.lower(),
             "color": MAGIC_CIRCLE_COLORS.get(self.boss_element, RED),
             "start": self.boss_pos,
             "end": end if end is not None else self.player_pos,
@@ -1705,6 +1711,8 @@ class SpellGame:
             "dur": dur if dur is not None else PROJECTILE_DURATION_MS,
             "r": 8,
             "origin": "boss",
+            "hand_side": -1 if end is not None and end[0] < self.player_pos[0] else 1,
+            "origin_visual_offset": self._boss_visual_offset(),
             "target": "player",
             "dmg": int(dmg),
         })
@@ -1727,6 +1735,7 @@ class SpellGame:
         })
 
     def _spawn_cast_effect(self, color: Tuple[int, int, int], style: str) -> None:
+        self._effects.append({"type": "player_motion", "style": style, "elapsed": 0, "dur": 450})
         self._effects.append({
             "type": "cast",
             "color": color,
@@ -1747,7 +1756,8 @@ class SpellGame:
             "dur": 1800,
         })
 
-    def _spawn_impact_effect(self, color: Tuple[int, int, int], style: str, hit: bool) -> None:
+    def _spawn_impact_effect(self, color: Tuple[int, int, int], style: str, hit: bool,
+                             target_visual_offset: Optional[float] = None) -> None:
         self._effects.append({
             "type": "impact",
             "color": color,
@@ -1757,6 +1767,7 @@ class SpellGame:
             "r0": 10,
             "r1": 42 if hit else 26,
             "hit": hit,
+            "target_visual_offset": target_visual_offset,
         })
 
     def _spawn_shield_ring(self) -> None:
@@ -1791,6 +1802,9 @@ class SpellGame:
                         )
                         self.boss_pos = (new_x, self.boss_pos[1])
                         e["dodged"] = True
+                        # Existing dodge remains the defensive mechanic; this event
+                        # only synchronizes the defensive animation with it.
+                        alive.append({"type": "boss_guard", "elapsed": 0, "dur": 420})
                         self._toast("BOSS DODGE!", GREY, keep_if_longer=True)
                     e["dodge_checked"] = True
 
@@ -1814,7 +1828,8 @@ class SpellGame:
                             heal = int(self._runes.add("hp_on_hit"))
                             if heal > 0:
                                 self.player_hp = min(self._max_player_hp(), self.player_hp + heal)
-                            self._spawn_impact_effect(e["color"], e.get("style", "fire"), True)
+                            self._spawn_impact_effect(e["color"], e.get("style", "fire"), True,
+                                                      e.get("target_visual_offset"))
                             self._dmg_dealt += dmg
                             self._hits_landed += 1
                             self._hitstop_ms = max(self._hitstop_ms, 95 if mult > 1.0 else 55)
@@ -1830,7 +1845,8 @@ class SpellGame:
                                 self._toast(f"HIT -{dmg} HP{tag}",
                                             YELLOW if mult >= 1.0 else GREY)
                         else:
-                            self._spawn_impact_effect(e["color"], e.get("style", "fire"), False)
+                            self._spawn_impact_effect(e["color"], e.get("style", "fire"), False,
+                                                      e.get("target_visual_offset"))
                             self._hits_missed += 1
                             self._toast("MISS", GREY, keep_if_longer=True)
                     else:

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import math
 import random
+import json
 from typing import List, Optional, Sequence, Tuple
 
 import pygame
@@ -96,14 +97,19 @@ class FPRenderer:
     WAND_FX = 0.61
     WAND_FY = 0.71
     WAND_SWAY_GAIN = 0.06   # player_offset_x → 완드 좌우 흔들림 픽셀 비율
+    WAND_SIZE = 380
 
     def wand_tip(self, player_offset_x: float = 0.0) -> Tuple[int, int]:
         """완드 끝 화면 좌표. player_offset_x(-1~1)만큼 좌우로 흔들린다."""
         shift = int(player_offset_x * self.W * self.WAND_SWAY_GAIN)
         bob = int(math.sin(self._tick * 0.045) * 5)
         if self._wand_art is not None:
-            # Center of the gem in the 512px Blender render, scaled to 310px.
-            return int(self.W * 0.56) + shift + 79, int(self.H * 0.68) + bob + 41
+            dx, dy, angle = self._wand_pose
+            center = self.WAND_SIZE // 2
+            gem = pygame.Vector2(round(79 * self.WAND_SIZE / 310) - center,
+                                 round(41 * self.WAND_SIZE / 310) - center).rotate(-angle)
+            return (int(self.W * 0.56) + shift + dx + center + round(gem.x),
+                    int(self.H * 0.68) + bob + dy + center + round(gem.y))
         sway = int(math.sin(self._tick * 0.019) * 2)
         return (int(self.W * self.WAND_FX) + shift + sway // 2,
                 int(self.H * self.WAND_FY) + bob)
@@ -119,6 +125,7 @@ class FPRenderer:
         self.font_big = font_big
         self.W, self.H = screen.get_size()
         self._tick: int = 0
+        self._motion_ms = 0
         # 개선된 한글 폰트 (더 크고 선명하게)
         self.font_kor       = FPRenderer._make_kor_font(22)
         self.font_kor_big   = FPRenderer._make_kor_font(28)
@@ -150,17 +157,42 @@ class FPRenderer:
         self._grade_cache: Optional[pygame.Surface] = None
         self._grain_tiles: List[pygame.Surface] = []
         self._arena_art = self._load_art("arena_background.png", (self.W, self.H))
-        self._wand_art = self._load_art("player_wand.png", (310, 310))
+        self._arena_runes = self._make_arena_runes()
+        self._wand_art = self._load_art("player_wand.png", (self.WAND_SIZE, self.WAND_SIZE))
+        self._wand_pose = (0, 0, 0)
+        self._guard_progress = 0.0
+        self._wand_rotations: dict[int, pygame.Surface] = {}
         self._menu_backdrop = pygame.Surface((self.W, self.H), pygame.SRCALPHA)
         self._menu_backdrop.fill((0, 0, 0, 100))
         self._boss_art = {
             name: self._load_art(f"boss_{name}.png", (400, 400))
             for name in ("arcane", "frost", "void")
         }
+        self._boss_motion = {name: self._load_boss_motion(name) for name in self._boss_art}
+        self._boss_hands = {name: self._load_boss_hands(name) for name in self._boss_art}
+        self._boss_hand_deltas = {-1: (-50, 20), 1: (50, 20)}
         self._art_boss_shadow = pygame.Surface((250, 38), pygame.SRCALPHA)
         for inset, alpha in ((0, 15), (12, 25), (25, 40), (40, 55), (55, 70)):
             pygame.draw.ellipse(self._art_boss_shadow, (5, 4, 10, alpha),
                                 (inset, inset // 14, 250 - inset * 2, 38 - inset // 7))
+
+    @staticmethod
+    def _make_arena_runes() -> List[pygame.Surface]:
+        base = pygame.Surface((256, 256), pygame.SRCALPHA)
+        pygame.draw.circle(base, (182, 112, 82, 65), (128, 128), 112, 2)
+        pygame.draw.circle(base, (182, 112, 82, 45), (128, 128), 94, 1)
+        for i in range(12):
+            a = math.tau * i / 12
+            p = (128 + int(102 * math.cos(a)), 128 + int(102 * math.sin(a)))
+            q = (128 + int(111 * math.cos(a)), 128 + int(111 * math.sin(a)))
+            pygame.draw.line(base, (213, 150, 109, 90), p, q, 3)
+        frames = []
+        for i in range(24):
+            rotated = pygame.transform.rotate(base, i * 15)
+            canvas = pygame.Surface((364, 364), pygame.SRCALPHA)
+            canvas.blit(rotated, rotated.get_rect(center=(182, 182)))
+            frames.append(pygame.transform.smoothscale(canvas, (470, 145)))
+        return frames
 
     @staticmethod
     def _load_art(name: str, size: Tuple[int, int]) -> Optional[pygame.Surface]:
@@ -174,6 +206,69 @@ class FPRenderer:
             return pygame.transform.smoothscale(image, size)
         except (pygame.error, OSError):
             return None
+
+    @staticmethod
+    def _load_boss_motion(name: str) -> List[pygame.Surface]:
+        """Load the Blender animation atlas once, retaining the static fallback."""
+        path = app_paths.resource_path("assets", f"boss_{name}_motion.png")
+        try:
+            sheet = pygame.image.load(str(path)).convert_alpha()
+            if sheet.get_size() != (3840, 960):
+                return []
+            return [pygame.transform.smoothscale(sheet.subsurface((i % 12 * 320, i // 12 * 320, 320, 320)),
+                                                 (400, 400)) for i in range(36)]
+        except (pygame.error, OSError):
+            return []
+
+    @staticmethod
+    def _load_boss_hands(name: str) -> list:
+        path = app_paths.resource_path("assets", f"boss_{name}_hands.json")
+        try:
+            with path.open(encoding="utf-8") as stream:
+                data = json.load(stream)
+            if len(data) != 36 or not all(
+                isinstance(frame, dict) and all(
+                    isinstance(frame.get(side), list) and len(frame[side]) == 2
+                    and all(isinstance(n, (int, float)) and 0 <= n <= 1 for n in frame[side])
+                    for side in ("-1", "1")) for frame in data):
+                return []
+            return data
+        except (OSError, ValueError, TypeError):
+            return []
+
+    def _update_wand_pose(self, effects: List[dict], shield_time_left: int, dt_ms: int) -> None:
+        target = 1.0 if shield_time_left > 0 else 0.0
+        step = max(0, dt_ms) / 220.0
+        self._guard_progress += max(-step, min(step, target - self._guard_progress))
+        attack = next((e for e in reversed(effects) if e.get("type") == "player_motion"), None)
+        thrust = 0.0
+        if attack:
+            t = max(0.0, min(1.0, attack.get("elapsed", 0) / max(1, attack.get("dur", 1))))
+            thrust = math.sin(math.pi * t)
+        g = self._guard_progress * (1.0 - thrust)
+        style = attack.get("style", "fire") if attack else "fire"
+        profiles = {"fire": (-55, -56, -16), "water": (20, -60, 14),
+                    "wind": (-78, -24, 23), "earth": (-18, -78, -18),
+                    "dark": (28, -62, 20), "light": (-48, -48, 11),
+                    "lightning": (-85, -72, -25)}
+        px, py, pa = profiles.get(style, profiles["fire"])
+        self._wand_pose = (round(-35 * g + px * thrust), round(-22 * g + py * thrust),
+                           round(12 * g + pa * thrust))
+
+    def _boss_frame_index(self, effects: List[dict]) -> int:
+        guard = next((e for e in reversed(effects) if e.get("type") == "boss_guard"), None)
+        shot = next((e for e in reversed(effects) if e.get("type") == "proj"
+                     and e.get("origin") == "boss" and e.get("elapsed", 0) < 350), None)
+        warning = next((e for e in reversed(effects) if e.get("type") == "telegraph"), None)
+        if shot:
+            return 20 + min(3, max(0, int(shot.get("elapsed", 0) / 90)))
+        if guard:
+            progress = guard.get("elapsed", 0) / max(1, guard.get("dur", 1))
+            return 24 + min(11, max(0, int(progress * 12)))
+        if warning:
+            progress = warning.get("elapsed", 0) / max(1, warning.get("dur", 1))
+            return 12 + min(7, max(0, int(progress * 8)))
+        return (self._motion_ms // 70) % 12
 
     # ── Particle System ────────────────────────────────────────────────────────
 
@@ -1092,8 +1187,11 @@ class FPRenderer:
         orb_center:        Optional[Tuple[int, int]] = None,
         orb_accent:        Tuple[int, int, int] = (150, 120, 255),
         player_max_hp:     int = PLAYER_MAX_HP,
+        boss_offset_x:     float = 0.0,
     ) -> None:
         self._tick += 1
+        self._motion_ms += max(0, dt_ms)
+        self._update_wand_pose(effects, shield_time_left, dt_ms)
 
         # 파티클 업데이트
         self.update_particles(dt_ms)
@@ -1109,10 +1207,10 @@ class FPRenderer:
 
         # 2. Boss (behind effects)
         self._draw_boss(boss_hp / BOSS_MAX_HP, effects, player_offset_x,
-                        boss_name=boss_name, accent=boss_accent)
+                        boss_name=boss_name, accent=boss_accent, boss_offset_x=boss_offset_x)
 
         # 3. Effects (projectiles)
-        self._draw_effects(effects, player_offset_x)
+        self._draw_effects(effects, player_offset_x, boss_offset_x)
         
         # 3.5. 파티클 렌더링 (이펙트 위에)
         self.render_particles()
@@ -1450,6 +1548,8 @@ class FPRenderer:
         W, H = self.W, self.H
         if self._arena_art is not None:
             self.screen.blit(self._arena_art, (0, 0))
+            rune = self._arena_runes[(self._motion_ms // 120) % len(self._arena_runes)]
+            self.screen.blit(rune, rune.get_rect(center=(W // 2, int(H * .79))))
             return
         horizon = H // 2
 
@@ -1594,6 +1694,7 @@ class FPRenderer:
         player_offset_x: float = 0.0,
         boss_name: str = "ARCANE BOSS",
         accent: Optional[Tuple[int, int, int]] = None,
+        boss_offset_x: float = 0.0,
     ) -> None:
         W, H = self.W, self.H
         enraged = hp_ratio <= 0.35
@@ -1619,7 +1720,7 @@ class FPRenderer:
         atk_lean  = -12 if is_attacking else 0
         recoil    = (min(hit_age, 4) * 4) if is_hit else 0
 
-        cx = W // 2 + boss_shift + float_x + atk_lean + recoil
+        cx = W // 2 + boss_shift + int(boss_offset_x) + float_x + atk_lean + recoil
         cy = H // 2 - 28 + float_y
         R  = int(72 * (1.08 if is_attacking else 1.0))
 
@@ -1629,11 +1730,26 @@ class FPRenderer:
             "VOIDBOUND DEVOURER": "void",
         }.get(boss_name, "arcane")
         sprite = self._boss_art.get(art_key)
+        frames = self._boss_motion.get(art_key, [])
+        frame_index = 0
+        if frames:
+            frame_index = self._boss_frame_index(effects)
+            sprite = frames[frame_index]
         if sprite is not None:
             # Rendered boss uses the same center, bob, recoil and HP state as the drawn fallback.
             shadow_rect = self._art_boss_shadow.get_rect(center=(cx, H // 2 + 177))
             self.screen.blit(self._art_boss_shadow, shadow_rect)
-            self.screen.blit(sprite, sprite.get_rect(center=(cx, cy + 14)))
+            sprite_rect = sprite.get_rect(center=(cx, cy + 14))
+            self.screen.blit(sprite, sprite_rect)
+            hands = self._boss_hands.get(art_key, [])
+            if frames and hands:
+                anchor_x = W // 2 + boss_shift + int(boss_offset_x)
+                for side in (-1, 1):
+                    hx, hy = hands[frame_index][str(side)]
+                    self._boss_hand_deltas[side] = (sprite_rect.left + round(hx * 400) - anchor_x,
+                                                     sprite_rect.top + round(hy * 400) - (H // 2 - 28))
+            else:
+                self._boss_hand_deltas = {-1: (-50, 20), 1: (50, 20)}
             if is_hit:
                 pygame.draw.circle(self.screen, (235, 226, 210), (cx, cy), 108, 3)
             if is_attacking:
@@ -1994,7 +2110,13 @@ class FPRenderer:
         if self._wand_art is not None:
             bob = int(math.sin(self._tick * 0.045) * 5)
             sway = int(player_offset_x * W * self.WAND_SWAY_GAIN)
-            self.screen.blit(self._wand_art, (int(W * 0.56) + sway, int(H * 0.68) + bob))
+            dx, dy, angle = self._wand_pose
+            if angle not in self._wand_rotations:
+                self._wand_rotations[angle] = pygame.transform.rotate(self._wand_art, angle)
+            image = self._wand_rotations[angle]
+            center = (int(W * .56) + sway + dx + self.WAND_SIZE // 2,
+                      int(H * .68) + bob + dy + self.WAND_SIZE // 2)
+            self.screen.blit(image, image.get_rect(center=center))
             return
         wand_shift = int(player_offset_x * W * self.WAND_SWAY_GAIN)
 
@@ -2187,11 +2309,12 @@ class FPRenderer:
 
     # ── Effects ────────────────────────────────────────────────────────────────
 
-    def _draw_effects(self, effects: List[dict], player_offset_x: float = 0.0) -> None:
+    def _draw_effects(self, effects: List[dict], player_offset_x: float = 0.0,
+                      boss_offset_x: float = 0.0) -> None:
         W, H = self.W, self.H
         boss_shift  = int(-player_offset_x * W * 0.03)
         wand_pt     = self.wand_tip(player_offset_x)
-        boss_center = (W // 2 + boss_shift, H // 2 - 28)
+        boss_center = (W // 2 + boss_shift + int(boss_offset_x), H // 2 - 28)
 
         for e in effects:
             etype = e["type"]
@@ -2206,10 +2329,16 @@ class FPRenderer:
                     # 시전 순간의 완드 위치 고정 → 플레이어가 이동해도 궤적 유지
                     cast_off = e.get("cast_offset_x", player_offset_x)
                     sx, sy = self.wand_tip(cast_off)
-                    ex, ey = boss_center
+                    target_offset = e.get("target_visual_offset", boss_offset_x)
+                    ex, ey = W // 2 + boss_shift + int(target_offset), boss_center[1]
                     draw_r = max(3, int(r * (1.0 - t * 0.25)))
                 else:
-                    sx, sy = boss_center
+                    side = e.get("hand_side", 1)
+                    if "render_hand_delta" not in e:
+                        e["render_hand_delta"] = self._boss_hand_deltas.get(side, (50, 20))
+                    hand_dx, hand_dy = e["render_hand_delta"]
+                    sx = W // 2 + boss_shift + int(e.get("origin_visual_offset", boss_offset_x)) + hand_dx
+                    sy = H // 2 - 28 + hand_dy
                     ex, ey = W // 2, H + 60
                     draw_r = max(3, int(r * (0.4 + t * 1.8)))
 
@@ -2228,6 +2357,8 @@ class FPRenderer:
             elif etype == "impact":
                 t = max(0.0, min(1.0, e["elapsed"] / float(e["dur"])))
                 cx, cy = boss_center
+                if e.get("target_visual_offset") is not None:
+                    cx = W // 2 + boss_shift + int(e["target_visual_offset"])
                 r    = int(e["r0"] + (e["r1"] - e["r0"]) * t)
                 fade = max(0.0, 1.0 - t)
                 col  = tuple(int(c * fade) for c in e["color"])
