@@ -98,6 +98,7 @@ def _run_hand_tracking(game: SpellGame, combo_engine: SpellComboEngine) -> None:
                 last_head_dir = None
 
             spell_name: Optional[str] = None
+            fallback_spell: Optional[str] = None
             cast_mode = "single"
             if pipeline is not None:
                 # 1) 주문 이벤트 소비
@@ -107,9 +108,11 @@ def _run_hand_tracking(game: SpellGame, combo_engine: SpellComboEngine) -> None:
                 for kind, name in pipeline.drain_spells():
                     if kind in ("amplify", "fusion"):
                         spell_name, cast_mode = name, kind
+                        fallback_spell = None
                         combo_engine.clear()
                     else:
                         spell_name = combo_engine.push_basic_spell(name, _now_s())
+                        fallback_spell = name if spell_name != name else None
                         cast_mode = "single"
 
                 # 2) 최신 비전 결과 소비(연속 신호: head_dir, 미러 프레임, 디버그 창)
@@ -139,7 +142,7 @@ def _run_hand_tracking(game: SpellGame, combo_engine: SpellComboEngine) -> None:
 
             # 3) 게임 1프레임(내부에서 clock.tick(60) — 유일한 프레임 리미터)
             running = game.run_one_frame(spell_name, head_dir=last_head_dir,
-                                         cast_mode=cast_mode)
+                                         cast_mode=cast_mode, fallback_spell=fallback_spell)
 
             # 4) 카메라 켜기/끄기 요청 처리 — 양방향이다.
             req = game.consume_camera_request()
@@ -185,6 +188,7 @@ def _run_hsv_tracking(game: SpellGame, combo_engine: SpellComboEngine) -> None:
     try:
         while running:
             spell_name: Optional[str] = None
+            fallback_spell: Optional[str] = None
             if canvas is not None:
                 data = canvas.update()
                 if data is None:
@@ -196,6 +200,7 @@ def _run_hsv_tracking(game: SpellGame, combo_engine: SpellComboEngine) -> None:
                     basic = analyzer.classify(traj)
                     if basic != "UNKNOWN":
                         spell_name = combo_engine.push_basic_spell(basic, _now_s())
+                        fallback_spell = basic if spell_name != basic else None
 
                 if SHOW_DEBUG_WINDOWS:
                     cv2.imshow("Tracking", data.frame)
@@ -204,7 +209,7 @@ def _run_hsv_tracking(game: SpellGame, combo_engine: SpellComboEngine) -> None:
                     if cv2.waitKey(1) & 0xFF == ord("q"):
                         break
 
-            running = game.run_one_frame(spell_name, head_dir=None)
+            running = game.run_one_frame(spell_name, head_dir=None, fallback_spell=fallback_spell)
 
             req = game.consume_camera_request()
             if req == "off" and canvas is not None:

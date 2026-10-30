@@ -43,3 +43,9 @@ def test_clear_resets_history():
     eng.push_basic_spell("FIRE", 0.0)
     eng.clear()
     assert eng.push_basic_spell("WATER", 0.1) == "WATER"  # FIRE 기록 사라짐
+
+
+def test_consecutive_combos_reuse_previous_input():
+    eng = SpellComboEngine()
+    assert [eng.push_basic_spell(name, t) for name, t in
+            (("FIRE", 0.0), ("WATER", 0.3), ("FIRE", 0.6))] == ["FIRE", "STEAM", "MUD"]

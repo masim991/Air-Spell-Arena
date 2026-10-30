@@ -39,10 +39,7 @@ class SpellComboEngine:
         self._trim(timestamp)
 
         combo = self._try_combine()
-        if combo is not None:
-            return combo
-
-        return spell_name
+        return combo if combo is not None else spell_name
 
     def _trim(self, timestamp: float) -> None:
         cutoff = timestamp - self.combo_window

@@ -65,6 +65,54 @@ def test_zero_cd_spell_repeatable(game):
         assert game.apply_spell("FIRE").applied
 
 
+def test_combo_cooldown_falls_back_to_current_basic_spell(game, monkeypatch):
+    from spell_combo import SpellComboEngine
+    from unittest.mock import Mock
+
+    engine = SpellComboEngine()
+    for t in (0.0, 0.6):
+        spell = engine.push_basic_spell("FIRE", t)
+        assert game.apply_spell(spell).applied
+    game._mana.reset()
+    spell = engine.push_basic_spell("FIRE", 1.2)
+    monkeypatch.setattr(game, "_update_effects", lambda dt: None)
+    monkeypatch.setattr(game, "clock", Mock(tick=Mock(return_value=16)))
+    assert game.run_one_frame(spell, fallback_spell="FIRE")
+    projectiles = [e for e in game._effects if e["type"] == "proj" and e.get("origin") == "player"]
+    assert len(projectiles) == 3
+    assert game.message_text == "FIRE!"
+
+
+def test_combo_low_mana_falls_back_without_free_cast(game, monkeypatch):
+    from unittest.mock import Mock
+
+    game._mana.current = 20
+    monkeypatch.setattr(game, "_update_effects", lambda dt: None)
+    monkeypatch.setattr(game, "clock", Mock(tick=Mock(return_value=16)))
+    assert game.run_one_frame("FLAME_BALL", fallback_spell="FIRE")
+    assert game._mana.current < 20
+    assert game._mana_fail_toast_left == 0
+    assert game.message_text == "FIRE!"
+    assert any(e["type"] == "proj" and e.get("origin") == "player" for e in game._effects)
+
+
+def test_combo_and_basic_both_lack_mana(game, monkeypatch):
+    from unittest.mock import Mock
+
+    game._mana.current = 0
+    monkeypatch.setattr(game, "_update_effects", lambda dt: None)
+    monkeypatch.setattr(game, "clock", Mock(tick=Mock(return_value=16)))
+    assert game.run_one_frame("FLAME_BALL", fallback_spell="FIRE")
+    assert not any(e["type"] == "proj" and e.get("origin") == "player" for e in game._effects)
+    assert game._mana_fail_toast_left > 0
+
+
+def test_successful_combo_does_not_also_cast_basic(game, monkeypatch):
+    monkeypatch.setattr(game, "_update_effects", lambda dt: None)
+    assert game.run_one_frame("FLAME_BALL", fallback_spell="FIRE")
+    assert len([e for e in game._effects if e["type"] == "proj" and e.get("origin") == "player"]) == 1
+
+
 # ── 상성 실제 피해 반영 ────────────────────────────────────────────────────
 
 def _cast_and_resolve(game, spell):

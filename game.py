@@ -471,6 +471,7 @@ class SpellGame:
         spell_name: Optional[str],
         head_dir: Optional[str] = None,
         cast_mode: str = "single",
+        fallback_spell: Optional[str] = None,
     ) -> bool:
         """한 프레임을 처리합니다.
 
@@ -482,6 +483,7 @@ class SpellGame:
             spell_name: 이번 프레임에 발동된 주문(없으면 None).
             head_dir: 머리 방향('LEFT'/'RIGHT'/None).
             cast_mode: 'single' | 'amplify' | 'fusion' — 양손 시전 여부.
+            fallback_spell: 연속 콤보가 거부됐을 때 시도할 현재 기본 주문.
 
         Returns:
             계속 실행하려면 True, 창 종료/ESC 시 False.
@@ -876,7 +878,10 @@ class SpellGame:
 
         # (플레이어 현재 위치에서 투사체가 출발하도록 이동 이후에 적용)
         if spell_name:
-            _result = self.apply_spell(spell_name, cast_mode)
+            can_fallback = bool(fallback_spell and cast_mode == "single")
+            _result = self.apply_spell(spell_name, cast_mode, quiet_failure=can_fallback)
+            if fallback_spell and can_fallback and _result.reason in ("cooldown", "no_mana"):
+                _result = self.apply_spell(fallback_spell)
             if _result.applied:
                 _fallback_elem = _SPELL_DB.get(_result.name, {}).get("element")
                 self._audio.play_spell_sfx(_result.name, fallback_element=_fallback_elem)
@@ -927,7 +932,7 @@ class SpellGame:
             self._recorder.capture(self.screen, dt, mask=self._clip_mask())
         return True
 
-    def apply_spell(self, spell_name: str, mode: str = "single") -> SpellResult:
+    def apply_spell(self, spell_name: str, mode: str = "single", *, quiet_failure: bool = False) -> SpellResult:
         """레지스트리(_SPELL_DB) 기반으로 주문 1건을 적용한다.
 
         Args:
@@ -935,6 +940,7 @@ class SpellGame:
             mode: 'single'  — 한 손 시전(기본)
                   'amplify' — 양손 같은 포즈. 위력 2배, 마나 1.6배.
                   'fusion'  — 양손 다른 포즈. spell_name 이 이미 상위 주문이다.
+            quiet_failure: 폴백 주문을 시도할 때 쿨다운·마나 부족 알림을 미룬다.
 
         시전이 거부되는 사유는 세 가지고, 검사 순서가 곧 우선순위다:
         미등록 주문 → 쿨다운 → 마나 부족. 마나를 마지막에 보는 이유는,
@@ -949,13 +955,15 @@ class SpellGame:
 
         cd_left = self._cooldowns.get(label, 0)
         if cd_left > 0:
-            self._toast(f"{label} (cooldown {cd_left / 1000:.1f}s)", GREY)
+            if not quiet_failure:
+                self._toast(f"{label} (cooldown {cd_left / 1000:.1f}s)", GREY)
             return SpellResult(label, False, "cooldown", mode)
 
         amplified = (mode == "amplify")
         cost_mult = AMPLIFY_COST_MULT if amplified else 1.0
         if not self._mana.try_spend(label, cost_mult):
-            self._notify_mana_short(label, cost_mult)
+            if not quiet_failure:
+                self._notify_mana_short(label, cost_mult)
             return SpellResult(label, False, "no_mana", mode)
         self._last_cast_cost = self._mana.effective_cost(label, cost_mult)
 

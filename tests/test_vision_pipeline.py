@@ -8,6 +8,50 @@ from types import SimpleNamespace
 
 from vision_loop import VisionPipeline, VisionResult, _EMA_ALPHA
 
+
+def test_hand_loop_passes_combo_fallback(monkeypatch):
+    from unittest.mock import MagicMock
+    import main
+    from spell_combo import SpellComboEngine
+
+    pipeline = MagicMock(failed=False)
+    pipeline.drain_spells.return_value = [("pose", "FIRE")]
+    pipeline.poll_result.return_value = None
+    game = MagicMock()
+    game.run_one_frame.return_value = False
+    game.consume_camera_request.return_value = None
+    engine = SpellComboEngine()
+    engine.push_basic_spell("FIRE", 0.0)
+    monkeypatch.setattr(main, "_open_pipeline", lambda game: pipeline)
+    monkeypatch.setattr(main, "_now_s", lambda: 0.6)
+    main._run_hand_tracking(game, engine)
+    game.run_one_frame.assert_called_once_with("FLAME_BALL", head_dir=None, cast_mode="single", fallback_spell="FIRE")
+
+
+def test_hsv_loop_passes_combo_fallback(monkeypatch):
+    from unittest.mock import MagicMock
+    import main
+    from spell_combo import SpellComboEngine
+
+    canvas = MagicMock(opened=True)
+    canvas.update.return_value = SimpleNamespace(center=(1, 1))
+    trajectory = MagicMock()
+    trajectory.poll_last_closed.return_value = [(1, 1)]
+    analyzer = MagicMock()
+    analyzer.classify.return_value = "DARK"
+    game = MagicMock()
+    game.run_one_frame.return_value = False
+    game.consume_camera_request.return_value = None
+    engine = SpellComboEngine()
+    engine.push_basic_spell("LIGHT", 0.0)
+    monkeypatch.setattr(main, "AirCanvas", lambda **kwargs: canvas)
+    monkeypatch.setattr(main, "TrajectoryBuffer", lambda config: trajectory)
+    monkeypatch.setattr(main, "GestureAnalyzer", lambda: analyzer)
+    monkeypatch.setattr(main, "_now_s", lambda: 0.6)
+    monkeypatch.setattr(main, "SHOW_DEBUG_WINDOWS", False)
+    main._run_hsv_tracking(game, engine)
+    game.run_one_frame.assert_called_once_with("BLINDNESS", head_dir=None, fallback_spell="DARK")
+
 # VisionPipeline._smooth 는 self 의 _ema / _prev_center 만 사용 → 카메라 없이
 # 최소 상태 객체에 언바운드 메서드를 직접 적용해 검증한다.
 _smooth = VisionPipeline._smooth
