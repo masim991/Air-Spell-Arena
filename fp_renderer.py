@@ -90,6 +90,13 @@ _SLOT_LABELS = {
 }
 
 
+def fit_path(font: pygame.font.Font, prefix: str, path: str, max_w: int) -> str:
+    """prefix+path 가 max_w 를 넘으면 경로 앞부분을 "..."로 줄인다(파일명은 끝에 남는다)."""
+    while len(path) > 8 and font.size(prefix + path)[0] > max_w:
+        path = "..." + path[4:]
+    return prefix + path
+
+
 class FPRenderer:
     """Handles all first-person rendering for the game."""
 
@@ -518,8 +525,7 @@ class FPRenderer:
         # 예전에는 "PLAY WITHOUT CAMERA" 가 단방향 시작 버튼이라 한 번 끄면
         # 재시작 말고는 되돌릴 방법이 없었다. 이제는 상태를 보여주는 토글이다.
         cam_label = "CAMERA  ON" if camera_active else "CAMERA  OFF  (KEYBOARD)"
-        self._draw_button(btn_no_camera, cam_label, self.font_game_tab,
-                          danger=not camera_active)
+        self._draw_button(btn_no_camera, cam_label, self.font_game_tab)
 
         # ── 접근성/챌린지 상태 줄 — 지금 어떤 설정으로 플레이하는지 한눈에 ──
         # 스트릭은 DAILY 버튼이 이미 말하고 있으므로 여기서 반복하지 않는다.
@@ -1188,6 +1194,7 @@ class FPRenderer:
         orb_accent:        Tuple[int, int, int] = (150, 120, 255),
         player_max_hp:     int = PLAYER_MAX_HP,
         boss_offset_x:     float = 0.0,
+        boss_max_hp:       int = BOSS_MAX_HP,
     ) -> None:
         self._tick += 1
         self._motion_ms += max(0, dt_ms)
@@ -1206,7 +1213,7 @@ class FPRenderer:
         self._draw_atmosphere(player_offset_x)
 
         # 2. Boss (behind effects)
-        self._draw_boss(boss_hp / BOSS_MAX_HP, effects, player_offset_x,
+        self._draw_boss(boss_hp / max(1, boss_max_hp), effects, player_offset_x,
                         boss_name=boss_name, accent=boss_accent, boss_offset_x=boss_offset_x)
 
         # 3. Effects (projectiles)
@@ -1346,6 +1353,7 @@ class FPRenderer:
         boss_name   = stats.get("boss_name") or "the Arcane Boss"
         stage_idx   = int(stats.get("stage_index", 1))
         stage_count = int(stats.get("stage_count", 1))
+        ladder_count = int(stats.get("ladder_count", stage_count))
         if state == "game_over":
             title_col = self._pulse_color((200, 40, 40), (255, 80, 80), tick, 50)
             title_txt = "GAME OVER"
@@ -1354,7 +1362,7 @@ class FPRenderer:
             title_col = self._pulse_color((190, 190, 196), WHITE, tick, 50)
             title_txt = f"STAGE {stage_idx} CLEAR!"
             sub_txt   = f"{boss_name} falls — {next_boss_name} awaits."
-        elif stage_idx >= stage_count:
+        elif stage_idx >= ladder_count:
             title_col = self._pulse_color((255, 210, 90), WHITE, tick, 40)
             title_txt = "GAUNTLET CLEARED!"
             sub_txt   = f"{boss_name} was the last stand — you beat the full gauntlet!"
@@ -1461,7 +1469,8 @@ class FPRenderer:
             saved.append(("SHARE CARD", card_path, (150, 200, 255)))
         for i, (label, path, col) in enumerate(saved):
             y = H - 22 - (len(saved) - 1 - i) * 20
-            note = self.font.render(f"{label} SAVED  ->  {path}", True, col)
+            text = fit_path(self.font, f"{label} SAVED  ->  ", path, W - 40)
+            note = self.font.render(text, True, col)
             self.screen.blit(note, note.get_rect(center=(W // 2, y)))
 
         pygame.display.flip()

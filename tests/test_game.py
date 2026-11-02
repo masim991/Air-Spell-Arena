@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-from game import SpellGame, _SPELL_DB, _SPELL_ALIASES, affinity_mult, BOSS_PHASES
+from game import SpellGame, _SPELL_DB, _SPELL_ALIASES, affinity_mult, BOSS_MAX_HP, BOSS_PHASES
 
 
 @pytest.fixture()
@@ -144,7 +144,8 @@ def test_super_effective_and_resisted_damage(game):
 def test_boss_phases_advance_with_hp():
     g = SpellGame()
     g._state = "playing"
-    g.boss_hp = 100
+    g.boss_hp = BOSS_MAX_HP
+    step = max(1, BOSS_MAX_HP // 100)
     seen = set()
     flashes = 0
     for i in range(1200):
@@ -152,8 +153,8 @@ def test_boss_phases_advance_with_hp():
         flashes += sum(1 for e in g._effects if e["type"] == "flash" and e["elapsed"] == 0)
         g._update_effects(16)
         seen.add(g.boss_phase)
-        if i % 5 == 0 and g.boss_hp > 3:
-            g.boss_hp -= 1
+        if i % 5 == 0 and g.boss_hp > 3 * step:
+            g.boss_hp -= step
     g.close()
     assert seen >= {1, 2, 3}
     assert g.boss_element == BOSS_PHASES[-1][1]
@@ -192,6 +193,28 @@ def test_render_pipeline_populates_atmosphere_and_grade(game):
     assert len(game._fp._motes) > 0          # 대기 입자 생성됨
     assert game._fp._grade_cache is not None  # 그레이드 캐시 빌드됨
     assert len(game._fp._grain_tiles) > 0
+
+
+# ── 스테이지 표시 / 엔딩 경로 ─────────────────────────────────────────────────
+
+@pytest.mark.parametrize(("difficulty", "expected"), [
+    ("easy", 1), ("normal", 2), ("hard", 3), ("impossible", 3),
+])
+def test_run_stage_count_matches_reachable_stages(game, difficulty, expected):
+    game.set_difficulty(difficulty)
+    assert game._run_stage_count() == expected
+
+
+def test_saved_path_fits_screen_width():
+    import pygame
+    from fp_renderer import fit_path
+    pygame.font.init()
+    font = pygame.font.SysFont(None, 24)
+    long_path = "C:\\Users\\someone\\AppData\\Roaming\\AirSpellArena\\" * 4 + "clips\\airspell_1.mp4"
+    text = fit_path(font, "HIGHLIGHT CLIP SAVED  ->  ", long_path, 600)
+    assert font.size(text)[0] <= 600
+    assert text.endswith("airspell_1.mp4")
+    assert fit_path(font, "X ", "short.mp4", 600) == "X short.mp4"
 
 
 # ── 리셋 ───────────────────────────────────────────────────────────────────

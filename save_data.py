@@ -36,7 +36,7 @@ def _defaults() -> Dict[str, Any]:
         "best_score": {d: 0 for d in _DIFFICULTIES},
         "camera_index": 0,
         "use_hand_tracking": True,
-        "show_debug_windows": True,
+        "show_debug_windows": False,
         "show_orb": True,             # 인게임 수정구(웹캠) 표시 — 인게임 V 키로 토글
         "save_cards": True,           # 런 종료 시 공유용 결과 카드 PNG 자동 저장
         "save_clips": True,           # 승리 시 직전 15초 하이라이트 클립 자동 저장
@@ -79,6 +79,10 @@ def load() -> Dict[str, Any]:
             data["daily"] = _clean_daily(loaded.get("daily"))
     except Exception as e:
         log.warning("save_data.json 로드 실패 — 기본값 사용: %s", e)
+    try:
+        data["camera_index"] = max(0, int(data["camera_index"]))
+    except (TypeError, ValueError, OverflowError):
+        data["camera_index"] = 0
     return data
 
 

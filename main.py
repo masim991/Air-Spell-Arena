@@ -31,7 +31,7 @@ from vision_loop import VisionPipeline
 # 카메라/추적 방식은 게임 내 메뉴(C/H 키)에서 바꿀 수 있으며 save_data.json에
 # 저장되어 다음 실행부터 적용된다(핫스왑이 아니라 재시작 시 적용).
 _saved = save_data.load()
-SHOW_DEBUG_WINDOWS = bool(_saved.get("show_debug_windows", True))  # 웹캠 디버그 창(Tracking/Mask/Paint) 표시
+SHOW_DEBUG_WINDOWS = bool(_saved.get("show_debug_windows", False))  # 웹캠 디버그 창(Tracking/Mask/Paint) 표시
 CAMERA_INDEX = int(_saved.get("camera_index", 0))
 SHOW_TRACKBARS = False       # HSV 경로 트랙바
 USE_HAND_TRACKING = bool(_saved.get("use_hand_tracking", True))  # True: MediaPipe 손가락 추적, False: HSV 마커 추적

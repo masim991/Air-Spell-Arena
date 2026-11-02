@@ -42,7 +42,7 @@ GOLD = (255, 215, 50)  # Bright Gold
 
 # ── 게임 밸런스 상수 ──────────────────────────────────────────────────────────
 PLAYER_MAX_HP = 100
-BOSS_MAX_HP = 100
+BOSS_MAX_HP = 250        # 100 이면 키보드 연타로 스테이지가 5초 안에 끝났다
 
 LIGHTNING_DMG = 25       # ZIGZAG → LIGHTNING
 LIGHTNING_COOLDOWN_MS = 4000
@@ -50,7 +50,7 @@ LIGHTNING_COOLDOWN_MS = 4000
 SHIELD_REDUCTION = 0.5   # CIRCLE → SHIELD (입는 피해 50% 감소)
 SHIELD_DURATION_MS = 2500
 
-BOSS_DMG = 5
+BOSS_DMG = 8             # 5 는 회피 없이 맞아도 위협이 되지 않았다
 
 MESSAGE_DURATION_MS = 1500
 PROJECTILE_DURATION_MS = 450
@@ -759,6 +759,25 @@ class SpellGame:
                                 self._reset_game()
                             break
 
+        if _prev_state != self._state:
+            if self._state == "pause":
+                self._pause_started_ms = pygame.time.get_ticks()
+                self._pause_vols = {
+                    "bgm": self._audio.get_volume("bgm"),
+                    "sfx": self._audio.get_volume(SPELL_SLOTS[0]),
+                }
+            elif self._state == "intro":
+                self._audio.stop_bgm()
+            elif self._state == "menu":
+                self._audio.play_bgm()
+            elif self._state == "playing":
+                self._audio.play_bgm()
+                self._audio.set_bgm_battle_mode(True)
+                if _prev_state == "pause":
+                    self._run_start_ms += max(0, pygame.time.get_ticks() - self._pause_started_ms)
+                else:
+                    self._start_new_run()
+
         # 엔딩/메뉴/설정 상태는 게임 로직 없이 렌더만
         if self._state == "intro":
             self.clock.tick(FPS)
@@ -905,24 +924,8 @@ class SpellGame:
             self._tick_ending = 0
             self._finish_run(won=False)
 
-        # BGM 전환: 상태가 바뀌는 순간만 실행
-        if _prev_state != self._state:
-            if self._state == "pause":
-                self._pause_vols = {
-                    "bgm": self._audio.get_volume("bgm"),
-                    "sfx": self._audio.get_volume(SPELL_SLOTS[0]),
-                }
-            elif self._state == "intro":
-                self._audio.stop_bgm()              # 인트로 중 BGM 없음
-            elif self._state == "menu":
-                self._audio.play_bgm()              # 메뉴: BGM 정상 볼륨
-            elif self._state == "playing":
-                self._audio.play_bgm()              # 게임: BGM 시작 (battle 본류가 앞에 있으면 무시)
-                self._audio.set_bgm_battle_mode(True)
-                if _prev_state != "pause":
-                    self._start_new_run()           # 일시정지 복귀가 아닌 "새 런" 시작
-            elif self._state in ("game_over", "you_win"):
-                self._audio.set_bgm_battle_mode(False)  # 엔딩: 볼륨 복원
+        if self._state in ("game_over", "you_win"):
+            self._audio.set_bgm_battle_mode(False)
 
         # 렌더
         self._render(dt)
@@ -1426,9 +1429,11 @@ class SpellGame:
                 self._toast(f"NEW BOSS UNLOCKED: {next_boss}", CYAN, keep_if_longer=True)
 
         best_scores: dict = self._save.setdefault("best_score", {})
-        prev_best = int(best_scores.get(self.difficulty, 0))
+        daily_key = self._daily.challenge.key if self._daily.active and self._daily.challenge else None
+        prev_best = (daily_mod.best_for(self._save, daily_key) if daily_key
+                     else int(best_scores.get(self.difficulty, 0)))
         is_record = self._chain_score > prev_best
-        if is_record:
+        if is_record and not daily_key:
             best_scores[self.difficulty] = self._chain_score
 
         self.score = stage_score
@@ -1442,10 +1447,11 @@ class SpellGame:
             "hits_landed": self._hits_landed,
             "hits_missed": self._hits_missed,
             "spells_cast": self._spells_cast,
-            "best_score": best_scores.get(self.difficulty, self._chain_score),
+            "best_score": max(prev_best, self._chain_score),
             "boss_name": self._boss_name,
             "stage_index": self._stage_index,
-            "stage_count": len(self._stage_ladder),
+            "stage_count": self._run_stage_count(),
+            "ladder_count": len(self._stage_ladder),
         }
         # 일일 챌린지 기록 — 체인 점수 기준(하루에 한 판만 세는 게 아니라 최고 기록)
         if self._daily.active and self._daily.challenge is not None:
@@ -1495,7 +1501,7 @@ class SpellGame:
             boss_name=self._boss_name,
             stats=self._last_run_stats,
             stage_index=self._stage_index,
-            stage_count=len(self._stage_ladder),
+            stage_count=self._run_stage_count(),
             difficulty=self.difficulty,
             rune_summary=self._runes.summary(),
             rune_colors=self._rune_colors(),
@@ -1540,6 +1546,10 @@ class SpellGame:
 
     def _max_stage_for_difficulty(self) -> int:
         return min(len(STAGE_LADDER), DIFFICULTY_MAX_STAGE.get(self.difficulty, 1))
+
+    def _run_stage_count(self) -> int:
+        """이번 체인에서 실제로 도달할 수 있는 스테이지 수(HUD·결과 카드의 분모)."""
+        return min(len(self._stage_ladder), self._max_stage_for_difficulty())
 
     def _update_player_dodge(self, head_dir: Optional[str], dt_ms: int) -> None:
         # 이동 속도(self._player_speed_px_s)는 _sync_rune_effects 가 룬을 반영해 설정한다.
@@ -1620,7 +1630,8 @@ class SpellGame:
             boss_offset_x=self._boss_visual_offset(),
             score=self.live_score(),
             stage_index=self._stage_index,
-            stage_count=len(self._stage_ladder),
+            stage_count=self._run_stage_count(),
+            boss_max_hp=BOSS_MAX_HP,
             mana_ratio=self._mana.ratio,
             mana_exhausted=self._mana.exhausted,
             mana_cost_preview=self._mana_cost_preview(),
