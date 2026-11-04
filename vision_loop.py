@@ -109,24 +109,30 @@ class VisionPipeline:
         self._dual = DualHandAnalyzer(cfg)
 
         self._cap = cv2.VideoCapture(camera_index)
-        self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, _CAP_WIDTH)
-        self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, _CAP_HEIGHT)
-        self._cap.set(cv2.CAP_PROP_FPS, _CAP_FPS)
         try:
-            self._cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # 지연 누적 방지
+            self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, _CAP_WIDTH)
+            self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, _CAP_HEIGHT)
+            self._cap.set(cv2.CAP_PROP_FPS, _CAP_FPS)
+            try:
+                self._cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+            except Exception:
+                pass
+            self._hands = mp_hands.Hands(
+                static_image_mode=False,
+                max_num_hands=_MAX_HANDS,
+                model_complexity=_HAND_COMPLEXITY,
+                min_detection_confidence=_HAND_DET_CONF,
+                min_tracking_confidence=_HAND_TRK_CONF,
+            )
+            try:
+                self._head = HeadTracker(draw_mesh=False, draw_debug=False,
+                                         sensitivity=1.45 if seated else 1.0)
+            except Exception:
+                self._hands.close()
+                raise
         except Exception:
-            pass
-
-        self._hands = mp_hands.Hands(
-            static_image_mode=False,
-            max_num_hands=_MAX_HANDS,
-            model_complexity=_HAND_COMPLEXITY,
-            min_detection_confidence=_HAND_DET_CONF,
-            min_tracking_confidence=_HAND_TRK_CONF,
-        )
-        # 앉으면 화면이 가까워 고개를 크게 돌리기 어렵다 → 감도를 올린다.
-        self._head = HeadTracker(draw_mesh=False, draw_debug=False,
-                                 sensitivity=1.45 if seated else 1.0)
+            self._cap.release()
+            raise
 
         # ── 스레드 공유 상태 ──
         self._lock = threading.Lock()

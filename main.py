@@ -52,9 +52,19 @@ def _open_pipeline(game: SpellGame) -> Optional[VisionPipeline]:
     """
     saved = save_data.load()
     idx = int(saved.get("camera_index", CAMERA_INDEX))
-    pipeline = VisionPipeline(idx, show_debug=SHOW_DEBUG_WINDOWS,
-                              seated=bool(saved.get("seated_mode", False)))
-    pipeline.start()
+    try:
+        pipeline = VisionPipeline(idx, show_debug=SHOW_DEBUG_WINDOWS,
+                                  seated=bool(saved.get("seated_mode", False)))
+        try:
+            pipeline.start()
+        except Exception:
+            pipeline.close()
+            raise
+    except Exception:
+        log.exception("카메라 #%d 초기화 실패 — 키보드 모드로 진행합니다.", idx)
+        game.set_camera_active(False)
+        game.notify_camera_error(idx)
+        return None
     if pipeline.failed:
         log.warning("카메라 #%d 를 열 수 없습니다 — 키보드 모드로 진행합니다.", idx)
         pipeline.close()
